@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <!-- 検索エンジンに載せない -->
+  <meta name="robots" content="noindex, nofollow">
+  <meta name="theme-color" content="#171b3d">
+  <!-- iPhone の「ホーム画面に追加」用 -->
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="ゆめのまど">
+  <link rel="apple-touch-icon" href="icon.png">
+  <link rel="icon" type="image/png" href="icon.png">
+  <title>イーブイと8つの夢の冒険（試作版）</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main id="app"></main>
+  <noscript>このゲームを遊ぶには、JavaScript を有効にしてください。</noscript>
+
+  <!-- 読み込みエラーを記録する（story.js の書きまちがいを画面で知らせるため） -->
+  <script>
+    window.__loadErrors = [];
+    window.addEventListener("error", function (e) {
+      window.__loadErrors.push({ file: e.filename, line: e.lineno, message: e.message });
+    });
+  </script>
+  <script src="story.js"></script>
+  <script src="room.js"></script>
+  <script src="lib/qrcode.js"></script>
+  <script src="engine.js"></script>
+</body>
+</html>
