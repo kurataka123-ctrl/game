@@ -38,7 +38,7 @@ const SETTINGS = {
   subtitle: "（仮題・試作版）",
   footer: "試作版",
   start: "intro",          // 「はじめから」で始まる場面の名前
-  playerName: "きみ",       // 主人公の呼び名（会話の {name} に入る）
+  playerName: "りょうた",   // 主人公の呼び名（会話の {name} に入る）
   chatTitle: "イーブイ",    // メッセージ画面の上に出る名前
   textSpeed: 30,           // 文字が出る速さ（1文字あたりのミリ秒。0 で一瞬）
   siteUrl: "",             // 公開後のURL（例 "https://〇〇.github.io/game/"）。カードのQRコードに使う
@@ -50,7 +50,7 @@ const SETTINGS = {
 //  name: 表示名 / emoji: 仮の絵（絵文字） / color: テーマ色
 //  ※ 試作では公式の画像を使わず、絵文字と色で表しています。
 const CHARACTERS = {
-  hero:     { name: "きみ",       emoji: "🧒", color: "#7aa7ff" },
+  hero:     { name: "りょうた",   emoji: "🧒", color: "#7aa7ff" },
   eevee:    { name: "イーブイ",   emoji: "🦊", color: "#d8b07a" },
   glaceon:  { name: "グレイシア", emoji: "❄️", color: "#8fd8ec" },
   sylveon:  { name: "ニンフィア", emoji: "🎀", color: "#f6b3cf" },
@@ -80,9 +80,18 @@ const SCENES = {
       "イーブイ：あれ？　見かけない顔だね。きみ、どこから来たの？",
     ],
     choices: [
-      { text: "わからない……", reply: "イーブイ：そっか……。きっと、遠いところから来たんだね。", next: "eevee_dream" },
-      { text: "気がついたら、ここにいたんだ", reply: "イーブイ：ふしぎだね……。でも、会えてうれしいな！", next: "eevee_dream" },
+      { text: "わからない……", reply: "イーブイ：そっか……。きっと、遠いところから来たんだね。", next: "name_ask" },
+      { text: "気がついたら、ここにいたんだ", reply: "イーブイ：ふしぎだね……。でも、会えてうれしいな！", next: "name_ask" },
     ],
+  },
+
+  name_ask: {
+    lines: [
+      "イーブイ：ぼくはイーブイ。きみの名前は？",
+      "「{name}」と名のった。",
+      "イーブイ：{name}かあ。いい名前だね！",
+    ],
+    next: "eevee_dream",
   },
 
   eevee_dream: {
@@ -356,8 +365,8 @@ const CARDS = [
     place: "自宅の部屋（夢の部屋の地図で光っていた場所）",
     text: "ここまで来てくれたんだね。\n\nこの世界の外にも、冒険の続きを待っている仲間がいる。\n\n君の手の中にある、小さな窓を開いてみて。",
     keyword: "ゆめのへや",
-    showKeyword: true,
-    qr: true,
+    showKeyword: false,   // ホーム画面のアイコンで始めるため、合言葉とQRは印刷しない
+    qr: false,
   },
   {
     place: "台所（コンロの近く。ただし火から十分はなれた場所）",
