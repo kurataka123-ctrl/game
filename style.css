@@ -547,6 +547,114 @@ button { font: inherit; color: inherit; touch-action: manipulation; }
 }
 .room-missing { padding: 20px; color: #fff; }
 
+/* ---------------- 氷の床のパズル（story.js の ice） ---------------- */
+.ice-box { position: absolute; inset: 0; }
+.ice-wrap {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: clamp(12px, 4cqw, 40px);
+  padding: 10px;
+}
+.ice-board {
+  position: relative;
+  flex: none;
+  display: grid;
+  grid-template-columns: repeat(var(--w), 1fr);
+  grid-template-rows: repeat(var(--h), 1fr);
+  width: min(62cqw, calc((100cqh - 24px) * var(--w) / var(--h)));
+  aspect-ratio: var(--w) / var(--h);
+  border: 6px solid #eaf8ff;
+  border-radius: 12px;
+  background: #b9e2f5;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, .35);
+  overflow: hidden;
+  container-type: inline-size;
+  touch-action: none;
+  cursor: auto;
+}
+.ice-cell {
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(255, 255, 255, .45);
+  background: linear-gradient(135deg, #e6f7fe, #bfe4f5 60%, #d6f0fb);
+  font-size: calc(62cqw / var(--w));
+  line-height: 1;
+}
+.ice-cell.rock { background: linear-gradient(135deg, #a7b2c0, #7d8898); }
+.ice-cell.goal span {
+  width: 86%;
+  height: 86%;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: radial-gradient(circle at 32% 28%, rgba(255, 255, 255, .7), transparent 55%), var(--c);
+  box-shadow: 0 0 10px 3px rgba(255, 255, 255, .8);
+}
+.ice-player {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: calc(100% / var(--w));
+  height: calc(100% / var(--h));
+  display: grid;
+  place-items: center;
+  font-size: calc(62cqw / var(--w));
+  line-height: 1;
+  transform: translate(calc(var(--x, 0) * 100%), calc(var(--y, 0) * 100%));
+  transition: transform var(--t, 0ms) linear;
+  pointer-events: none;
+}
+.ice-face {
+  width: 86%;
+  height: 86%;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: radial-gradient(circle at 32% 28%, rgba(255, 255, 255, .6), transparent 55%), #d8b07a;
+  box-shadow: 0 3px 8px rgba(0, 0, 0, .3);
+}
+.ice-face.bump { animation: shake .3s; }
+.ice-board.cleared .ice-face { box-shadow: 0 0 0 4px #fff3b0, 0 0 18px 8px rgba(255, 230, 120, .9); }
+.ice-controls { display: flex; flex-direction: column; align-items: center; gap: 12px; cursor: auto; }
+.ice-pad { display: grid; grid-template-columns: repeat(3, 58px); grid-template-rows: repeat(3, 58px); gap: 6px; }
+.ice-btn {
+  border: 2px solid #eaf8ff;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, .9);
+  color: #2b5f86;
+  font-size: 26px;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, .25);
+}
+.ice-btn:active { transform: scale(.94); background: #dff3ff; }
+.ice-btn.up { grid-column: 2; grid-row: 1; }
+.ice-btn.left { grid-column: 1; grid-row: 2; }
+.ice-btn.right { grid-column: 3; grid-row: 2; }
+.ice-btn.down { grid-column: 2; grid-row: 3; }
+.ice-reset { min-height: 42px; padding: 8px 18px; font-size: 15px; border-color: #eaf8ff; background: rgba(255, 255, 255, .9); color: #2b5f86; }
+.ice-reset:hover { background: #fff; }
+.ice-skip .btn.ghost {
+  min-height: 36px;
+  padding: 6px 14px;
+  border-radius: 999px;
+  background: rgba(10, 40, 70, .6);
+  color: #fff;
+  font-size: 14px;
+  text-decoration: none;
+}
+/* 縦長の画面（スマホ）では、ボタンを盤面の下に出す */
+@media (max-width: 640px) {
+  .ice-wrap { flex-direction: column; gap: 8px; }
+  .ice-board { width: min(92cqw, calc((100cqh - 220px) * var(--w) / var(--h))); }
+  .ice-pad { grid-template-columns: repeat(3, 50px); grid-template-rows: repeat(3, 44px); gap: 4px; }
+  .ice-controls { flex-direction: row; flex-wrap: wrap; justify-content: center; gap: 8px 12px; }
+  .ice-skip:empty { display: none; }
+}
+
 /* ---------------- メッセージ画面（iPhone向け） ---------------- */
 .chat { background: var(--chat-bg); color: #222; }
 .chat-head {

@@ -197,15 +197,16 @@
     const topbar = el("header", { class: "topbar" }, chapter, partyBtn, menuBtn);
     const chars = el("div", { class: "chars", "aria-hidden": "true" });
     const roomBox = el("div", { class: "room-wrap", hidden: true });
+    const iceBox = el("div", { class: "ice-box", hidden: true });
     const layer = el("div", { class: "stage-layer" });
     const draft = el("div", { class: "draft-badge", text: "仮の内容", hidden: true });
-    const stage = el("div", { class: "stage" }, chars, roomBox, layer, draft);
+    const stage = el("div", { class: "stage" }, chars, roomBox, iceBox, layer, draft);
     const name = el("div", { class: "nameplate", hidden: true });
     const text = el("div", { class: "text" });
     const mark = el("div", { class: "next-mark", text: "▼", hidden: true, "aria-hidden": "true" });
     const box = el("div", { class: "textbox", tabindex: "0" }, name, text, mark);
     const root = el("section", { class: "screen novel" }, topbar, stage, box);
-    return { root, chapter, partyBtn, chars, roomBox, layer, draft, stage, name, text, mark, box };
+    return { root, chapter, partyBtn, chars, roomBox, iceBox, layer, draft, stage, name, text, mark, box };
   }
 
   // 文字を1文字ずつ表示する
@@ -266,7 +267,7 @@
     }
     novel.box.classList.toggle("narration", !c);
     // 会話にだけ出てくるキャラクターも、空きがあれば表示する
-    if (c && who !== "hero" && novel.roomBox.hidden && !NV.shown.includes(who) && NV.shown.length < 3) {
+    if (c && who !== "hero" && novel.roomBox.hidden && novel.iceBox.hidden && !NV.shown.includes(who) && NV.shown.length < 3) {
       NV.shown.push(who);
       novel.chars.append(charNode(who));
     }
@@ -324,7 +325,18 @@
       novel.mark.hidden = true;
       NV.mode = "idle";
       NV.dark = sc.room === "dark";
-      if (sc.room) {
+      NV.ice = null;
+      ICE.move = null;
+      novel.iceBox.hidden = true;
+      novel.iceBox.replaceChildren();
+      if (sc.ice) {
+        novel.chars.replaceChildren();
+        NV.shown = [];
+        novel.roomBox.hidden = true;
+        novel.roomBox.replaceChildren();
+        novel.iceBox.hidden = false;
+        NV.ice = renderIce(novel.iceBox, parseIce(sc.ice));
+      } else if (sc.room) {
         novel.chars.replaceChildren();
         NV.shown = [];
         novel.roomBox.hidden = false;
@@ -453,8 +465,193 @@
       if (found) showDone();
     },
 
+    // 氷の床のパズル：クリアしたら onClear、あきらめたら onSkip
+    ice(sc, onClear, onSkip) {
+      const spec = sc.ice;
+      const ice = parseIce(spec);
+      const view = NV.ice || renderIce(novel.iceBox, ice);
+      const best = iceBest(ice);
+      const token = gen;
+      let pos = { x: ice.start.x, y: ice.start.y };
+      let moves = 0;
+      let resets = 0;
+      let busy = false;
+      let done = false;
+      NV.mode = "ice";
+      novel.mark.hidden = true;
+      setSpeaker(null);
+      const help = fill(spec.help || "矢印キー（または ボタン・スワイプ）で、すべる方向を選ぼう。");
+      const status = () => { novel.text.textContent = `${help}\nすべった回数：${moves}`; };
+      const arrows = { up: "↑", left: "←", right: "→", down: "↓" };
+      const names = { up: "上へすべる", left: "左へすべる", right: "右へすべる", down: "下へすべる" };
+      const pad = el("div", { class: "ice-pad" },
+        Object.keys(arrows).map((d) => el("button", {
+          type: "button", class: "ice-btn " + d, text: arrows[d], "aria-label": names[d],
+          onclick: (e) => { e.stopPropagation(); move(d); },
+        })));
+      const skipBox = el("div", { class: "ice-skip" });
+      const controls = el("div", { class: "ice-controls", onclick: (e) => e.stopPropagation() },
+        pad,
+        el("button", { type: "button", class: "btn ice-reset", text: "↺ やりなおす", onclick: () => reset() }),
+        skipBox);
+      view.wrap.append(controls);
+      status();
+
+      const finish = () => {
+        done = true;
+        ICE.move = null;
+        controls.remove();
+      };
+      const showSkip = () => {
+        if (!onSkip || skipBox.childNodes.length) return;
+        if (resets < (spec.skip.after == null ? 2 : spec.skip.after)) return;
+        skipBox.append(el("button", {
+          type: "button", class: "btn ghost", text: fill(spec.skip.text || "むずかしい……"),
+          onclick: () => { finish(); onSkip(); },
+        }));
+      };
+      const reset = () => {
+        if (busy || done) return;
+        pos = { x: ice.start.x, y: ice.start.y };
+        moves = 0;
+        resets += 1;
+        view.place(pos.x, pos.y, 0);
+        status();
+        showSkip();
+      };
+      const bump = () => {
+        view.face.classList.remove("bump");
+        void view.face.offsetWidth;
+        view.face.classList.add("bump");
+      };
+      const move = (dir) => {
+        if (busy || done || token !== gen) return;
+        const r = iceSlide(ice, pos.x, pos.y, dir);
+        if (!r.steps && !r.goal) { bump(); return; }
+        moves += 1;
+        busy = true;
+        const ms = r.steps * 90;
+        view.place(r.x, r.y, ms);
+        pos = { x: r.x, y: r.y };
+        status();
+        setTimeout(() => {
+          busy = false;
+          if (token !== gen || !r.goal) return;
+          finish();
+          view.board.classList.add("cleared");
+          novel.text.textContent = moves <= best
+            ? `クリア！　${moves}回でたどりついた。最短記録だ！`
+            : `クリア！　${moves}回でたどりついた。（最短は${best}回）`;
+          setTimeout(() => { if (token === gen) onClear(); }, 1200);
+        }, ms + 40);
+      };
+
+      // スマホ：盤面をスワイプしてもすべれる
+      let t0 = null;
+      view.board.addEventListener("touchstart", (e) => {
+        const t = e.touches[0];
+        t0 = { x: t.clientX, y: t.clientY };
+      }, { passive: true });
+      view.board.addEventListener("touchend", (e) => {
+        if (!t0) return;
+        const t = e.changedTouches[0];
+        const dx = t.clientX - t0.x;
+        const dy = t.clientY - t0.y;
+        t0 = null;
+        if (Math.max(Math.abs(dx), Math.abs(dy)) < 24) return;
+        move(Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? "right" : "left") : (dy > 0 ? "down" : "up"));
+      });
+      ICE.move = move;
+    },
+
     proceed(cb) { cb(); },
   };
+
+  // ==============================================================
+  // 氷の床のパズル（story.js の ice）
+  //   map の文字：. 氷 / # 岩 / S スタート / G ゴール（ぶつかるとクリア）
+  //   すべり出すと、岩・かべ・ゴールにぶつかるまで止まれない
+  // ==============================================================
+  const ICE_DIRS = { up: [0, -1], down: [0, 1], left: [-1, 0], right: [1, 0] };
+  const ICE = { move: null };   // 矢印キーで動かすための入り口
+
+  function parseIce(spec) {
+    const rows = toArray(spec && spec.map).map((r) => Array.from(String(r)));
+    const w = Math.max(0, ...rows.map((r) => r.length));
+    const ice = { w, h: rows.length, rock: new Set(), start: null, goal: null, starts: 0, goals: 0 };
+    rows.forEach((r, y) => {
+      for (let x = 0; x < w; x++) {
+        const ch = r[x] || "#";
+        if (ch === "#") ice.rock.add(x + "," + y);
+        else if (ch === "S") { ice.start = { x, y }; ice.starts += 1; }
+        else if (ch === "G") { ice.goal = { x, y }; ice.goals += 1; }
+      }
+    });
+    return ice;
+  }
+
+  // (x, y) から dir へすべったときに止まる場所。goal：ゴールにぶつかったか
+  function iceSlide(ice, x, y, dir) {
+    const [dx, dy] = ICE_DIRS[dir];
+    let steps = 0;
+    for (;;) {
+      const nx = x + dx;
+      const ny = y + dy;
+      if (ice.goal && nx === ice.goal.x && ny === ice.goal.y) return { x, y, steps, goal: true };
+      if (nx < 0 || ny < 0 || nx >= ice.w || ny >= ice.h || ice.rock.has(nx + "," + ny)) return { x, y, steps, goal: false };
+      x = nx;
+      y = ny;
+      steps += 1;
+    }
+  }
+
+  // 最短で何回すべればクリアできるか（たどりつけないときは -1）
+  function iceBest(ice) {
+    if (!ice.start || !ice.goal) return -1;
+    const seen = new Set([ice.start.x + "," + ice.start.y]);
+    let layer = [ice.start];
+    for (let n = 1; layer.length; n++) {
+      const nextLayer = [];
+      for (const p of layer) {
+        for (const dir of Object.keys(ICE_DIRS)) {
+          const r = iceSlide(ice, p.x, p.y, dir);
+          if (r.goal) return n;
+          const key = r.x + "," + r.y;
+          if (!seen.has(key)) { seen.add(key); nextLayer.push(r); }
+        }
+      }
+      layer = nextLayer;
+    }
+    return -1;
+  }
+
+  function renderIce(container, ice) {
+    const goal = CHARS.glaceon || {};
+    const hero = CHARS.eevee || {};
+    const board = el("div", { class: "ice-board", style: `--w:${ice.w};--h:${ice.h}`, role: "img", "aria-label": "氷の床" });
+    for (let y = 0; y < ice.h; y++) {
+      for (let x = 0; x < ice.w; x++) {
+        const isRock = ice.rock.has(x + "," + y);
+        const isGoal = ice.goal && ice.goal.x === x && ice.goal.y === y;
+        board.append(el("div", {
+          class: "ice-cell" + (isRock ? " rock" : "") + (isGoal ? " goal" : ""),
+          style: isGoal ? `--c:${goal.color || "#8fd8ec"}` : null,
+        }, isRock ? el("span", { text: "🪨" }) : isGoal ? el("span", { text: goal.emoji || "★" }) : null));
+      }
+    }
+    const face = el("span", { class: "ice-face", text: hero.emoji || "●" });
+    const player = el("div", { class: "ice-player", "aria-hidden": "true" }, face);
+    board.append(player);
+    const wrap = el("div", { class: "ice-wrap" }, board);
+    container.replaceChildren(wrap);
+    const place = (x, y, ms) => {
+      player.style.setProperty("--t", `${ms}ms`);
+      player.style.setProperty("--x", x);
+      player.style.setProperty("--y", y);
+    };
+    if (ice.start) place(ice.start.x, ice.start.y, 0);
+    return { wrap, board, player, face, place };
+  }
 
   // 夢の部屋の地図を描く（onPick があれば、家具をタップできる）
   // dark が true なら、暗い部屋（家具は影だけ、光る場所はリングの光）にする
@@ -717,6 +914,7 @@
       return;
     }
     gen += 1;
+    ICE.move = null;
     closeOverlay();
     if (NV.typer) { NV.typer.cancel(); NV.typer = null; }
     CV.skip = null;
@@ -735,6 +933,13 @@
 
   function afterLines(sc, view) {
     const next = () => giveWord(sc, view, () => leave(sc, view));
+    if (sc.ice && view === NovelView) {
+      const skip = sc.ice.skip && sc.ice.skip.next ? sc.ice.skip : null;
+      view.ice(sc,
+        () => view.say(toArray(sc.ice.clear), next, true),
+        skip ? () => view.say(toArray(skip.reply), () => runScene(skip.next), true) : null);
+      return;
+    }
     if (sc.room && view === NovelView) {
       view.explore(sc, next);
       return;
@@ -898,6 +1103,7 @@
   // ==============================================================
   function showTitle() {
     gen += 1;
+    ICE.move = null;
     if (NV.typer) { NV.typer.cancel(); NV.typer = null; }
     CV.skip = null;
     closeOverlay();
@@ -1057,6 +1263,15 @@
           check(sc.input.skip.next, `${at} の skip`);
         }
       }
+      if (sc.ice) {
+        const ice = parseIce(sc.ice);
+        if (ice.starts !== 1) errors.push(`${at} の ice：S（スタート）を、ちょうど1つ書いてください。`);
+        if (ice.goals !== 1) errors.push(`${at} の ice：G（ゴール）を、ちょうど1つ書いてください。`);
+        if (ice.starts === 1 && ice.goals === 1 && iceBest(ice) < 0) errors.push(`${at} の ice：この氷の床は、ゴールにたどりつけません。`);
+        if (!sc.next) errors.push(`${at} の ice には、next（クリアしたあとの行き先）が必要です。`);
+        if (sc.ice.skip) check(sc.ice.skip.next, `${at} の ice の skip`);
+        if (sc.mode === "chat") warnings.push(`${at}：メッセージ形式（chat）では、氷の床のパズルを表示できません。`);
+      }
       for (const g of toArray(sc.give)) {
         if (!CHARS[g]) errors.push(`${at} の give：「${g}」というキャラクターがいません。`);
         else if (!CHARS[g].word) errors.push(`${at} の give：「${CHARS[g].name}」に word（言葉）が書かれていません。`);
@@ -1186,6 +1401,15 @@
     if (overlay.classList.contains("open")) {
       if (e.key === "Escape") closeOverlay();
       return;
+    }
+    // 氷の床のパズル：矢印キー（または W A S D）ですべる
+    if (currentView === "novel" && ICE.move) {
+      const dir = { ArrowUp: "up", ArrowDown: "down", ArrowLeft: "left", ArrowRight: "right", w: "up", s: "down", a: "left", d: "right" }[e.key];
+      if (dir) {
+        e.preventDefault();
+        ICE.move(dir);
+        return;
+      }
     }
     const tag = (e.target && e.target.tagName ? e.target.tagName : "").toLowerCase();
     if (["input", "textarea", "select", "button", "a"].includes(tag)) return;
