@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="robots" content="noindex, nofollow">
-  <title>印刷用カード（イーブイと8つの夢の冒険）</title>
+  <title>印刷用カード（イーブイと8つの夢）</title>
   <style>
     :root { --ink: #2d2a32; --gold: #c9a24a; --paper: #fffdf6; }
     * { box-sizing: border-box; }
@@ -66,6 +66,18 @@
     .kw b { display: block; margin-top: .5mm; font-size: 17pt; letter-spacing: .15em; }
     .qr { display: flex; flex-direction: column; align-items: center; gap: 1mm; margin-top: 2.5mm; font-size: 8.5pt; }
     .qr svg { display: block; width: 28mm; height: 28mm; }
+    .blank {
+      flex: 1.2;
+      margin-top: 3mm;
+      border: 1.2mm dashed #d8cba6;
+      border-radius: 3mm;
+      display: flex;
+      align-items: flex-end;
+      justify-content: center;
+      padding-bottom: 2mm;
+      font-size: 8pt;
+      color: #c9bfa8;
+    }
     .memo { margin: 4px 2px 0; font-size: 12px; line-height: 1.6; color: #555; white-space: pre-wrap; word-break: break-all; }
     .error { max-width: 880px; margin: 0 auto; padding: 16px; background: #fff0f0; color: #a1122b; border-radius: 12px; }
     @page { size: A4 portrait; margin: 10mm; }
@@ -83,7 +95,9 @@
       <li>このページを印刷すると、ゲームで使うカードができます（A4用紙1枚に4枚）。</li>
       <li>文章・合言葉・QRコードの有無は、<code>story.js</code> の <code>CARDS</code> で変更できます。</li>
       <li>点線で切り取ってください。カードの下の「置き場所メモ」は印刷されません。</li>
-      <li>台所のカードは火から十分はなれた場所に置いてください。おふろ場のカードは、ラミネートや袋で防水してください。</li>
+      <li>ブラッキーのカードは、ぬいぐるみに結びつけてください。QRコードは、公開URLを設定すると印刷されます。</li>
+      <li>おふろ場のカードは、空らんに駅名を手で書き、ラミネートや袋で防水してください。</li>
+      <li>印刷したら、QRコードを息子さんのiPhoneのカメラで読めるか、事前にためしてください（ためしたあとは記録を消す）。</li>
     </ul>
     <p id="url-info"></p>
     <button type="button" onclick="window.print()">印刷する</button>
@@ -149,6 +163,8 @@
           kw.append(make("b", null, c.keyword));
           card.append(kw);
         }
+        // 空らんは印刷では空のまま（説明は下の置き場所メモにだけ出す）
+        if (c.blank) card.append(make("div", "blank"));
         let qrNote = "なし";
         if (c.qr && c.keyword) {
           if (base && typeof qrcode === "function") {
@@ -167,7 +183,8 @@
         }
         wrap.append(card);
         wrap.append(make("p", "memo",
-          `カード${i + 1}　置き場所メモ：${c.place || "未設定"}\n合言葉：${c.keyword || "なし"}　QR：${qrNote}`));
+          `カード${i + 1}　置き場所メモ：${c.place || "未設定"}\n合言葉：${c.keyword || "なし"}　QR：${qrNote}` +
+          (c.blank ? `\n空らん：${c.blank}` : "")));
         sheet.append(wrap);
       });
     })();

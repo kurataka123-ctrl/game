@@ -68,6 +68,32 @@
       .toLowerCase();
   }
 
+  // 答えを読めない形（暗号）にする：駅名など、ページに書きたくない答え用
+  // story.js では answers: ["#1a2b3c4d"] のように「#」で始めて書く
+  function secret(s) {
+    const t = "eevee:" + norm(s);
+    let h = 0x811c9dc5;
+    for (let i = 0; i < t.length; i++) {
+      h ^= t.charCodeAt(i);
+      h = Math.imul(h, 0x01000193) >>> 0;
+    }
+    return "#" + h.toString(16).padStart(8, "0");
+  }
+
+  function isAnswer(text, answers) {
+    return toArray(answers).some((a) => {
+      const s = String(a == null ? "" : a).trim();
+      return s.startsWith("#") ? s.toLowerCase() === secret(text) : norm(s) === norm(text);
+    });
+  }
+
+  // 言葉 "ミステ【リ】ー" → 【 】の文字を光らせて表示する
+  function wordNode(w, cls) {
+    const parts = String(w == null ? "" : w).split(/【(.+?)】/);
+    return el("span", { class: "word" + (cls ? " " + cls : "") },
+      parts.map((p, i) => (i % 2 ? el("mark", { text: p }) : p)));
+  }
+
   // 話し手の名前（または ID）→ キャラクターID
   const nameToId = {};
   for (const [id, c] of Object.entries(CHARS)) {
@@ -117,7 +143,7 @@
       try { localStorage.removeItem(SAVE_KEY); } catch (e) { /* 何もしない */ }
     },
   };
-  const freshState = () => ({ scene: null, met: [], chapter: "", bg: "" });
+  const freshState = () => ({ scene: null, met: [], words: [], chapter: "", bg: "" });
   let state = freshState();
   let gen = 0;            // 場面が変わるたびに増える番号（古いタイマーを無効にする）
   let currentView = "";
@@ -297,11 +323,12 @@
       novel.text.textContent = "";
       novel.mark.hidden = true;
       NV.mode = "idle";
+      NV.dark = sc.room === "dark";
       if (sc.room) {
         novel.chars.replaceChildren();
         NV.shown = [];
         novel.roomBox.hidden = false;
-        renderRoom(novel.roomBox, null);
+        renderRoom(novel.roomBox, null, NV.dark);
       } else {
         novel.roomBox.hidden = true;
         novel.roomBox.replaceChildren();
@@ -336,7 +363,7 @@
       setLayer(box);
     },
 
-    input(spec, onSubmit, onHint) {
+    input(spec, onSubmit, onHint, onSkip) {
       novel.mark.hidden = true;
       const field = el("input", {
         type: "text", class: "text-input", placeholder: spec.placeholder || "ここに入力",
@@ -358,6 +385,10 @@
         el("div", { class: "input-prompt", text: fill(spec.prompt || "答えを入力してね") }),
         field,
         el("div", { class: "input-buttons" },
+          onSkip ? el("button", {
+            type: "button", class: "btn ghost", text: fill(spec.skip.text || "どうしてもわからない"),
+            onclick: () => { setLayer(null); onSkip(); },
+          }) : null,
           onHint ? el("button", {
             type: "button", class: "btn", text: "ヒント",
             onclick: () => { setLayer(null); onHint(); },
@@ -367,11 +398,26 @@
       if (!TOUCH) field.focus({ preventScroll: true });
     },
 
+    // 言葉を手に入れたときのカード（とじると先へ進む）
+    reveal(id, then) {
+      const c = CHARS[id] || {};
+      novel.mark.hidden = true;
+      openOverlay(el("div", { class: "panel word-panel", style: `--c:${c.color || "#ccc"}` },
+        el("div", { class: "word-get", text: "✦ 言葉を手に入れた ✦" }),
+        el("div", { class: "word-from" },
+          el("span", { class: "word-avatar", text: c.emoji || "？", "aria-hidden": "true" }),
+          `${c.name || ""}からの言葉`),
+        wordNode(c.word, "big"),
+        el("p", { class: "panel-note", text: "なかまノート（📖）に書きこまれた。" }),
+        el("button", { class: "btn primary", type: "button", text: "OK", onclick: closeOverlay })), then);
+    },
+
     // 地図を調べる
     explore(sc, onDone) {
       NV.mode = "explore";
       novel.mark.hidden = true;
       setSpeaker(null);
+      const dark = NV.dark;
       novel.text.textContent = fill(sc.exploreText || (RM && RM.exploreText) || "気になる場所を調べてみよう。");
       const needFind = Boolean(RM) && RM.requireFind !== false && (RM.items || []).some((it) => it.shine);
       let found = !needFind;
@@ -384,7 +430,7 @@
             if (NV.typer) { NV.typer.cancel(); NV.typer = null; }
             NV.mode = "idle";
             setLayer(null);
-            renderRoom(novel.roomBox, null);
+            renderRoom(novel.roomBox, null, dark);
             onDone();
           },
         }));
@@ -392,14 +438,18 @@
       renderRoom(novel.roomBox, (item) => {
         if (NV.typer) NV.typer.cancel();
         let doneNow = false;
-        const handle = typeInto(novel.text, fill(item.text || item.name || ""), () => {
+        // 暗い部屋では、家具の名前がはっきりしない文章にする
+        const said = dark
+          ? item.dark || (item.shine ? "リングの形の光だ……！" : `暗くて、よく見えない。……${item.name}、かな？`)
+          : item.text || item.name || "";
+        const handle = typeInto(novel.text, fill(said), () => {
           doneNow = true;
           NV.typer = null;
         });
         if (!doneNow) NV.typer = handle;
         if (item.shine) found = true;
         if (found) showDone();
-      });
+      }, dark);
       if (found) showDone();
     },
 
@@ -407,7 +457,8 @@
   };
 
   // 夢の部屋の地図を描く（onPick があれば、家具をタップできる）
-  function renderRoom(container, onPick) {
+  // dark が true なら、暗い部屋（家具は影だけ、光る場所はリングの光）にする
+  function renderRoom(container, onPick, dark) {
     if (!RM) {
       container.replaceChildren(el("div", { class: "room-missing", text: "room.js を読み込めませんでした。" }));
       return;
@@ -415,9 +466,9 @@
     const cols = RM.cols || 10;
     const rows = RM.rows || 8;
     const room = el("div", {
-      class: "room" + (onPick ? " interactive" : ""),
+      class: "room" + (onPick ? " interactive" : "") + (dark ? " dark" : ""),
       style: `--cols:${cols};--rows:${rows};--floor:${RM.floor || "#f2e6cf"}`,
-      role: "group", "aria-label": "夢の部屋の地図",
+      role: "group", "aria-label": dark ? "暗い部屋" : "夢の部屋の地図",
     });
     for (const it of RM.items || []) {
       const pct = (v, total) => `${(v / total) * 100}%`;
@@ -430,10 +481,10 @@
         class: "room-item" + shape + (it.shine ? " shine" : ""),
         style: `left:${pct(it.x, cols)};top:${pct(it.y, rows)};width:${pct(it.w, cols)};height:${pct(it.h, rows)};--c:${it.color || "#ddd"}`,
         disabled: !onPick,
-        "aria-label": it.name,
+        "aria-label": dark ? (it.shine ? "リングの光" : "暗くて見えないもの") : it.name,
       },
-        it.icon ? el("span", { class: "room-icon", text: it.icon, "aria-hidden": "true" }) : null,
-        el("span", { class: "room-label", text: it.name }));
+        it.icon && !dark ? el("span", { class: "room-icon", text: it.icon, "aria-hidden": "true" }) : null,
+        dark ? null : el("span", { class: "room-label", text: it.name }));
       if (onPick) {
         btn.addEventListener("click", (e) => {
           e.stopPropagation();
@@ -571,7 +622,7 @@
       scrollChat();
     },
 
-    input(spec, onSubmit, onHint) {
+    input(spec, onSubmit, onHint, onSkip) {
       const field = el("input", {
         type: "text", class: "chat-text", placeholder: spec.placeholder || "ここに入力",
         autocomplete: "off", autocapitalize: "off", autocorrect: "off", spellcheck: "false",
@@ -589,19 +640,43 @@
           onSubmit(value);
         },
       }, field, el("button", { type: "submit", class: "send-btn", text: "送信" }));
+      const skipText = onSkip ? fill(spec.skip.text || "どうしてもわからない") : "";
       chat.foot.replaceChildren(
         spec.prompt ? el("div", { class: "foot-prompt", text: fill(spec.prompt) }) : null,
         form,
-        onHint ? el("button", {
-          type: "button", class: "hint-btn", text: "💡 ヒントをもらう",
-          onclick: () => {
-            chat.foot.replaceChildren();
-            addMsg({ who: "hero", text: "ヒントがほしい！" });
-            onHint();
-          },
-        }) : null);
+        onHint || onSkip ? el("div", { class: "foot-links" },
+          onHint ? el("button", {
+            type: "button", class: "hint-btn", text: "💡 ヒントをもらう",
+            onclick: () => {
+              chat.foot.replaceChildren();
+              addMsg({ who: "hero", text: "ヒントがほしい！" });
+              onHint();
+            },
+          }) : null,
+          onSkip ? el("button", {
+            type: "button", class: "hint-btn", text: "🏳 " + skipText,
+            onclick: () => {
+              chat.foot.replaceChildren();
+              addMsg({ who: "hero", text: skipText });
+              onSkip();
+            },
+          }) : null) : null);
       scrollChat();
       if (!TOUCH) field.focus({ preventScroll: true });
+    },
+
+    // 言葉を手に入れたときの、特別なメッセージ
+    reveal(id, then) {
+      const c = CHARS[id] || {};
+      const token = gen;
+      CV.lastWho = undefined;
+      chat.log.append(el("div", { class: "msg word-msg", style: `--c:${c.color || "#ccc"}` },
+        el("div", { class: "word-card" },
+          el("div", { class: "word-get", text: `✦ ${c.name || ""}から 言葉をもらった ✦` }),
+          wordNode(c.word, "big"),
+          el("div", { class: "word-note", text: "なかまノート（📖）に書きこまれた" }))));
+      scrollChat();
+      setTimeout(() => { if (token === gen) then(); }, S.textSpeed ? 700 : 0);
     },
 
     proceed(cb) {
@@ -651,11 +726,24 @@
   }
 
   function afterLines(sc, view) {
+    const next = () => giveWord(sc, view, () => leave(sc, view));
     if (sc.room && view === NovelView) {
-      view.explore(sc, () => leave(sc, view));
+      view.explore(sc, next);
       return;
     }
-    leave(sc, view);
+    next();
+  }
+
+  // give: "glaceon" → 会話のあとに、その仲間の言葉を手に入れる
+  function giveWord(sc, view, then) {
+    const id = typeof sc.give === "string" ? sc.give : null;
+    if (!id || !CHARS[id] || !CHARS[id].word) {
+      then();
+      return;
+    }
+    if (!state.words.includes(id)) state.words.push(id);
+    storage.save(state);
+    view.reveal(id, then);
   }
 
   function leave(sc, view) {
@@ -672,25 +760,33 @@
     });
   }
 
-  function askInput(sc, view) {
+  // misses：まちがえた回数（skip の「どうしてもわからない」を出すために数える）
+  function askInput(sc, view, misses = 0) {
     const spec = sc.input;
-    const answers = toArray(spec.answers).map(norm);
     const onHint = spec.hint
-      ? () => view.say(toArray(spec.hint), () => askInput(sc, view), false)
+      ? () => view.say(toArray(spec.hint), () => askInput(sc, view, misses), false)
+      : null;
+    const skip = spec.skip && spec.skip.next ? spec.skip : null;
+    const onSkip = skip && misses >= (skip.after == null ? 2 : skip.after)
+      ? () => view.say(toArray(skip.reply), () => runScene(skip.next), true)
       : null;
     view.input(spec, (text) => {
-      if (answers.includes(norm(text))) {
+      if (isAnswer(text, spec.answers)) {
         view.say(toArray(spec.correct), () => runScene(spec.next), true);
       } else {
-        view.say(toArray(spec.wrong || "……ちがうみたい。もう一度ためしてみよう。"), () => askInput(sc, view), false);
+        view.say(toArray(spec.wrong || "……ちがうみたい。もう一度ためしてみよう。"), () => askInput(sc, view, misses + 1), false);
       }
-    }, onHint);
+    }, onHint, onSkip);
   }
 
   function applyMeet(sc) {
     const list = toArray(sc.meet).filter((id) => CHARS[id]);
     const fresh = list.filter((id) => !state.met.includes(id));
     state.met.push(...fresh);
+    // give が [ ] のときは、まとめて言葉を受けとる（途中の章から始めたとき用）
+    if (Array.isArray(sc.give)) {
+      for (const id of sc.give) if (CHARS[id] && CHARS[id].word && !state.words.includes(id)) state.words.push(id);
+    }
     updateParty();
     // 1匹だけ新しく会ったときに、お知らせを出す
     if (typeof sc.meet === "string" && fresh.length) {
@@ -718,29 +814,43 @@
   // ==============================================================
   // 8. 重ねて表示する画面（なかまノート・メニュー・地図・確認）
   // ==============================================================
-  function openOverlay(content) {
+  // onClose：とじたときに1回だけ呼ぶ（場面が変わったあとは呼ばない）
+  let onOverlayClose = null;
+  function openOverlay(content, onClose) {
     overlay.replaceChildren(content);
     overlay.classList.add("open");
+    const token = gen;
+    onOverlayClose = onClose ? () => { if (token === gen) onClose(); } : null;
   }
   function closeOverlay() {
     overlay.classList.remove("open");
     overlay.replaceChildren();
+    const cb = onOverlayClose;
+    onOverlayClose = null;
+    if (cb) cb();
   }
   overlay.addEventListener("click", (e) => { if (e.target === overlay) closeOverlay(); });
 
   function openParty() {
     const n = metCount();
+    const got = PARTY.filter((id) => state.words.includes(id)).length;
     const cells = PARTY.map((id) => {
       const c = CHARS[id] || {};
       const met = state.met.includes(id);
-      return el("div", { class: "party-cell" },
+      const hasWord = state.words.includes(id) && c.word;
+      return el("div", { class: "party-cell" + (met ? " met" : "") },
         el("div", { class: "party-slot" + (met ? " met" : ""), style: met ? `--c:${c.color || "#ccc"}` : null, text: met ? c.emoji || "？" : "？" }),
-        el("div", { class: "party-name", text: met ? c.name : "？？？" }));
+        el("div", { class: "party-info" },
+          el("div", { class: "party-name", text: met ? c.name : "？？？" }),
+          hasWord ? wordNode(c.word, "party-word") : el("span", { class: "party-word none", text: "―" })));
     });
+    const note = got >= PARTY.length
+      ? "8つの言葉がそろった！　光っている文字に、注目……！"
+      : n >= PARTY.length ? "8匹ぜんいんに会えた！" : "8匹ぜんいんに会えたら……？";
     openOverlay(el("div", { class: "panel" },
       el("h2", { text: `📖 なかまノート　${n} / ${PARTY.length}` }),
       el("div", { class: "party-grid" }, cells),
-      el("p", { class: "panel-note", text: n >= PARTY.length ? "8匹ぜんいんに会えた！" : "8匹ぜんいんに会えたら……？" }),
+      el("p", { class: "panel-note", text: note }),
       el("button", { class: "btn primary", type: "button", text: "とじる", onclick: closeOverlay })));
   }
 
@@ -785,13 +895,14 @@
     closeOverlay();
     const save = storage.load();
     const canResume = Boolean(save && save.scene && SCN[save.scene]);
+    // 記録があるときは「つづきから」をいちばん上にする（まちがえて最初からにしないように）
     titleScreen.replaceChildren(el("div", { class: "title-wrap" },
       el("div", { class: "title-deco", text: "✦　✧　✦", "aria-hidden": "true" }),
       el("h1", { class: "title-main", text: S.title || "" }),
       S.subtitle ? el("p", { class: "title-sub", text: S.subtitle }) : null,
       el("div", { class: "title-menu" },
-        el("button", { class: "btn primary", type: "button", text: "はじめから", onclick: () => newGame(canResume) }),
-        canResume ? el("button", { class: "btn", type: "button", text: "つづきから", onclick: () => resume(save) }) : null,
+        canResume ? el("button", { class: "btn primary", type: "button", text: "つづきから", onclick: () => resume(save) }) : null,
+        el("button", { class: canResume ? "btn" : "btn primary", type: "button", text: "はじめから", onclick: () => newGame(canResume) }),
         el("button", { class: "btn", type: "button", text: "あいことばを入れる", onclick: showKeyword })),
       S.footer ? el("p", { class: "title-foot", text: S.footer }) : null));
     show("title");
@@ -811,6 +922,7 @@
   function loadState(save) {
     state = Object.assign(freshState(), save || {});
     if (!Array.isArray(state.met)) state.met = [];
+    if (!Array.isArray(state.words)) state.words = [];
     updateParty();
   }
 
@@ -878,6 +990,10 @@
     if (!key) return false;
     const id = findKeyword(key);
     if (!id) return false;
+    // アドレスから合言葉を消しておく（ページを開き直したときに、同じ場面へもどらないように）
+    try {
+      history.replaceState(null, "", location.pathname + (DEBUG ? "?debug" : ""));
+    } catch (e) { /* 消せなくても遊べる */ }
     const save = storage.load();
     if (save && save.scene && SCN[save.scene] && save.scene !== id) {
       showTitle();
@@ -885,8 +1001,8 @@
         el("div", { class: "kw-icon", text: "🔑", "aria-hidden": "true" }),
         el("p", { class: "panel-text", text: `合言葉「${key}」を受けとった！` }),
         el("div", { class: "panel-buttons column" },
-          el("button", { class: "btn primary", type: "button", text: "この合言葉の場面からはじめる", onclick: () => startFrom(id) }),
-          el("button", { class: "btn", type: "button", text: "前回のつづきから", onclick: () => resume(save) }))));
+          el("button", { class: "btn primary", type: "button", text: "前回のつづきから", onclick: () => resume(save) }),
+          el("button", { class: "btn", type: "button", text: "この合言葉の場面からはじめる", onclick: () => startFrom(id) }))));
       return true;
     }
     startFrom(id);
@@ -924,6 +1040,18 @@
         if (!toArray(sc.input.answers).length) errors.push(`${at} の input に answers（正解）がありません。`);
         if (!sc.input.next) errors.push(`${at} の input に next（正解したときの行き先）がありません。`);
         check(sc.input.next, `${at} の input`);
+        for (const a of toArray(sc.input.answers)) {
+          const s = String(a).trim();
+          if (s.startsWith("#") && !/^#[0-9a-f]{8}$/i.test(s)) errors.push(`${at} の暗号の答え「${s}」の形がおかしいようです（# と英数字8文字）。`);
+        }
+        if (sc.input.skip) {
+          if (!sc.input.skip.next) errors.push(`${at} の skip に next（行き先）がありません。`);
+          check(sc.input.skip.next, `${at} の skip`);
+        }
+      }
+      for (const g of toArray(sc.give)) {
+        if (!CHARS[g]) errors.push(`${at} の give：「${g}」というキャラクターがいません。`);
+        else if (!CHARS[g].word) errors.push(`${at} の give：「${CHARS[g].name}」に word（言葉）が書かれていません。`);
       }
       if (sc.end) check(sc.end.next, `${at} の end`);
       if (!sc.next && !sc.choices && !sc.input && !sc.end) {
@@ -939,6 +1067,10 @@
       });
     }
     for (const [word, id] of Object.entries(KEYS)) check(id, `合言葉「${word}」`);
+    for (const id of PARTY) {
+      const w = CHARS[id] && CHARS[id].word;
+      if (w && !/【.+?】/.test(w)) warnings.push(`CHARACTERS の ${id} の言葉「${w}」に、光らせる文字の【 】がありません。`);
+    }
     if (RM) {
       const cols = RM.cols || 10;
       const rows = RM.rows || 8;
@@ -982,6 +1114,20 @@
     }
   }
 
+  // 答えを入れると、story.js の answers に書く暗号を表示する
+  function secretTool() {
+    const field = el("input", { type: "text", class: "debug-input", placeholder: "答えを入力（例：駅名）", autocomplete: "off" });
+    const out = el("code", { class: "debug-out", text: "" });
+    const update = () => {
+      const v = field.value.trim();
+      out.textContent = v ? `"${secret(v)}",　← answers に貼りつける` : "";
+    };
+    field.addEventListener("input", update);
+    return el("div", { class: "debug-kw" },
+      field, out,
+      el("p", { class: "debug-note", text: "漢字とひらがなは別の答えになります。「東京」と「とうきょう」のように、両方の暗号を書いてください。ひらがなとカタカナ、全角と半角のちがいは同じとみなします。" }));
+  }
+
   function setupDebug(problems) {
     const base = location.href.split(/[?#]/)[0];
     const online = /^https?:$/.test(location.protocol);
@@ -1000,8 +1146,10 @@
         select,
         el("button", { type: "button", text: "この場面へ", onclick: () => { panel.hidden = true; runScene(select.value, true); } })),
       el("div", { class: "debug-row" },
-        el("button", { type: "button", text: "なかまを全員にする", onclick: () => { state.met = PARTY.slice(); storage.save(state); updateParty(); toast("なかまを全員にしました"); } }),
+        el("button", { type: "button", text: "なかまと言葉を全部にする", onclick: () => { state.met = PARTY.slice(); state.words = PARTY.slice(); storage.save(state); updateParty(); toast("なかまと言葉を全部そろえました"); } }),
         el("button", { type: "button", text: "記録（セーブ）を消す", onclick: () => { storage.clear(); state = freshState(); updateParty(); toast("記録を消しました"); } })),
+      el("h4", { text: "答えを暗号にする（駅名など、ページに書きたくない答え用）" }),
+      secretTool(),
       el("h4", { text: "合言葉（iPhoneでQRを読むと、その場面から始まる）" }),
       online ? null : el("p", { class: "debug-note", text: "※ QRコードは、インターネット上に公開したページで開いたときだけ表示されます。" }),
       keyRows,
