@@ -508,6 +508,9 @@ button { font: inherit; color: inherit; touch-action: manipulation; }
   50% { box-shadow: 0 0 22px 10px rgba(255, 225, 110, .95); }
 }
 .room-done { box-shadow: 0 6px 18px rgba(0, 0, 0, .35); animation: rise .25s ease-out both; }
+/* 部屋の外（room.js の wall: true）。部屋のかべと同じ色でぬる */
+.room-wall { position: absolute; background: #6d5a48; pointer-events: none; }
+.room.dark .room-wall { background: #1b1f3c; }
 
 /* 暗い部屋（story.js の room: "dark"）：家具は影だけ。光る場所はリングの光 */
 .room.dark {
