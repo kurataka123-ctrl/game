@@ -422,7 +422,8 @@ button { font: inherit; color: inherit; touch-action: manipulation; }
   animation: rise .25s ease-out both;
 }
 .input-prompt { font-weight: 700; }
-.input-buttons { display: flex; gap: 10px; justify-content: flex-end; }
+.input-buttons { display: flex; flex-wrap: wrap; gap: 10px; justify-content: flex-end; }
+.input-panel .btn.ghost { border-color: transparent; background: transparent; color: var(--ink-soft); }
 
 .draft-badge {
   position: absolute;
@@ -507,6 +508,40 @@ button { font: inherit; color: inherit; touch-action: manipulation; }
   50% { box-shadow: 0 0 22px 10px rgba(255, 225, 110, .95); }
 }
 .room-done { box-shadow: 0 6px 18px rgba(0, 0, 0, .35); animation: rise .25s ease-out both; }
+
+/* 暗い部屋（story.js の room: "dark"）：家具は影だけ。光る場所はリングの光 */
+.room.dark {
+  background-color: #090b1a;
+  background-image: radial-gradient(circle at 50% 50%, rgba(80, 90, 160, .12), transparent 70%);
+  background-size: auto;
+  border-color: #1b1f3c;
+}
+.room.dark .room-item {
+  background: rgba(150, 160, 220, .07);
+  border-color: rgba(150, 160, 220, .14);
+  box-shadow: none;
+}
+.room.dark.interactive .room-item:hover { background: rgba(150, 160, 220, .16); box-shadow: none; }
+.room.dark .room-item.shine {
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+  animation: none;
+  overflow: visible;
+}
+.room.dark .room-item.shine::after {
+  content: "";
+  width: 72%;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  border: 3px solid #ffe27a;
+  box-shadow: 0 0 10px 3px rgba(255, 226, 122, .8), inset 0 0 8px 2px rgba(255, 226, 122, .6);
+  animation: ring 2.2s ease-in-out infinite;
+}
+@keyframes ring {
+  0%, 100% { opacity: .35; transform: scale(.9); }
+  50% { opacity: 1; transform: scale(1.05); }
+}
 .room-missing { padding: 20px; color: #fff; }
 
 /* ---------------- メッセージ画面（iPhone向け） ---------------- */
@@ -640,6 +675,7 @@ button { font: inherit; color: inherit; touch-action: manipulation; }
   font-weight: 700;
   cursor: pointer;
 }
+.foot-links { display: flex; flex-wrap: wrap; justify-content: center; gap: 4px 16px; }
 .hint-btn {
   align-self: center;
   width: auto !important;
@@ -715,14 +751,24 @@ button { font: inherit; color: inherit; touch-action: manipulation; }
 .panel-note { margin: 0; font-size: 13px; color: var(--ink-soft); }
 .panel-buttons { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
 .panel-buttons.column { flex-direction: column; align-items: stretch; }
-.party-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px 8px; }
+.party-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; text-align: left; }
+.party-cell {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 6px 8px;
+  border-radius: 12px;
+  background: #f4efe3;
+}
 .party-slot {
-  width: 100%;
-  aspect-ratio: 1;
+  flex: none;
+  width: 42px;
+  height: 42px;
   border-radius: 50%;
   display: grid;
   place-items: center;
-  font-size: clamp(24px, 7vw, 38px);
+  font-size: 22px;
   line-height: 1;
   background: #ece6d8;
   color: #b3a98f;
@@ -733,7 +779,56 @@ button { font: inherit; color: inherit; touch-action: manipulation; }
   color: inherit;
   box-shadow: 0 3px 8px rgba(0, 0, 0, .18);
 }
-.party-name { margin-top: 4px; font-size: 12px; }
+.party-info { display: flex; flex-direction: column; min-width: 0; }
+.party-name { font-size: 12px; color: var(--ink-soft); }
+.party-word { font-size: 15px; font-weight: 700; letter-spacing: .02em; overflow-wrap: anywhere; }
+.party-word.none { color: #c9bfa8; font-weight: 400; }
+/* スマホでは1列にして、長い言葉も1行で読めるようにする */
+@media (max-width: 480px) {
+  .party-grid { grid-template-columns: 1fr; gap: 6px; }
+  .party-cell { padding: 4px 10px; }
+  .party-slot { width: 36px; height: 36px; font-size: 19px; }
+  .party-info { flex-direction: row; align-items: baseline; gap: 10px; }
+  .party-name { flex: none; width: 5.2em; }
+}
+@media (max-width: 360px) {
+  .party-info { flex-direction: column; gap: 0; }
+}
+
+/* 言葉：【 】で囲んだ文字を光らせる */
+.word mark {
+  background: none;
+  color: #d1401f;
+  font-weight: 900;
+  text-shadow: 0 0 6px rgba(255, 196, 60, .95), 0 0 2px rgba(255, 255, 255, .9);
+}
+.word.big { display: block; font-size: clamp(26px, 7vw, 34px); font-weight: 700; letter-spacing: .08em; line-height: 1.4; }
+.word-panel { border: 4px solid var(--c, var(--gold)); }
+.word-get { color: #b07d1e; font-weight: 700; letter-spacing: .08em; }
+.word-from { display: flex; align-items: center; justify-content: center; gap: 8px; color: var(--ink-soft); }
+.word-avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: 20px;
+  background: radial-gradient(circle at 32% 28%, rgba(255, 255, 255, .6), transparent 55%), var(--c);
+}
+.msg.word-msg { justify-content: center; }
+.word-card {
+  width: min(92%, 360px);
+  padding: 12px 16px;
+  border-radius: 16px;
+  border: 3px solid var(--c, var(--gold));
+  background: #fffaf0;
+  color: var(--ink);
+  text-align: center;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, .12);
+}
+.word-card .word-get { font-size: 13px; }
+.word-card .word.big { font-size: 28px; margin: 4px 0; }
+.word-note { font-size: 12px; color: #8a90a0; }
 .map-panel { width: min(640px, 100%); }
 .map-box .room {
   width: 100%;
@@ -842,6 +937,8 @@ button { font: inherit; color: inherit; touch-action: manipulation; }
 .debug-qr { width: 120px; }
 .debug-qr svg { display: block; width: 100%; height: auto; }
 .debug-note { margin: 0; color: #666; font-size: 13px; }
+.debug-input { flex: 1; min-width: 180px; font: inherit; font-size: 16px; padding: 8px 10px; border-radius: 8px; border: 1px solid #bbb; }
+.debug-out { font-size: 14px; user-select: all; -webkit-user-select: all; }
 .debug-error { color: #a1122b; }
 .debug-warn { color: #8a5a00; }
 
