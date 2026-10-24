@@ -472,6 +472,14 @@
     });
     for (const it of RM.items || []) {
       const pct = (v, total) => `${(v / total) * 100}%`;
+      // wall: true は、部屋の外（出窓のまわりなど）をぬりつぶすだけ。調べられない
+      if (it.wall) {
+        room.append(el("div", {
+          class: "room-wall", "aria-hidden": "true",
+          style: `left:${pct(it.x, cols)};top:${pct(it.y, rows)};width:${pct(it.w, cols)};height:${pct(it.h, rows)}`,
+        }));
+        continue;
+      }
       // 形に合わせて文字の並べ方を変える（細長い家具でも名前が切れないように）
       const shape = it.w <= 1 && it.h <= 1 ? " tiny"
         : it.h <= 1 && it.w >= 2 ? " wide"
