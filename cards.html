@@ -93,10 +93,11 @@
     <h1>🖨 印刷用カード</h1>
     <ul>
       <li>このページを印刷すると、ゲームで使うカードができます（A4用紙1枚に4枚）。</li>
-      <li>文章・合言葉・QRコードの有無は、<code>story.js</code> の <code>CARDS</code> で変更できます。</li>
+      <li>文章・合言葉・QRコードの有無は、<code>data.js</code> の <code>CARDS</code> で変更できます。</li>
       <li>点線で切り取ってください。カードの下の「置き場所メモ」は印刷されません。</li>
       <li>ブラッキーのカードは、ぬいぐるみに結びつけてください。QRコードは、公開URLを設定すると印刷されます。</li>
-      <li>おふろ場のカードは、空らんに駅名を手で書き、ラミネートや袋で防水してください。</li>
+      <li>おふろ場のカードは、空らんに駅名を手で書き、ラミネートや袋で防水してください。鏡に駅名を書く日は、このカードは置きません。</li>
+      <li>ブースターのカードは、冷蔵庫の横の奥の方（見て探せる位置）に置いてください。家の人には、動かさないよう伝えておきます。</li>
       <li>印刷したら、QRコードを息子さんのiPhoneのカメラで読めるか、事前にためしてください（ためしたあとは記録を消す）。</li>
     </ul>
     <p id="url-info"></p>
@@ -110,20 +111,21 @@
       window.__loadErrors.push({ file: e.filename, line: e.lineno, message: e.message });
     });
   </script>
-  <script src="story.js"></script>
+  <script src="data.js"></script>
   <script src="lib/qrcode.js"></script>
   <script>
     (() => {
       const get = (fn) => { try { return fn(); } catch (e) { return undefined; } };
       const settings = get(() => SETTINGS) || {};
       const cards = get(() => CARDS);
+      const ui = get(() => UI) || {};
       const sheet = document.getElementById("sheet");
       const info = document.getElementById("url-info");
 
       if (!Array.isArray(cards)) {
         const box = document.createElement("div");
         box.className = "error";
-        box.textContent = "story.js の CARDS を読み込めませんでした。story.js に書きまちがいがないか確認してください。";
+        box.textContent = "data.js の CARDS を読み込めませんでした。data.js に書きまちがいがないか確認してください。";
         sheet.replaceWith(box);
         return;
       }
@@ -143,7 +145,7 @@
         info.textContent = `QRコードの読み取り先：${base}index.html?key=（合言葉）`;
       } else {
         info.className = "warn";
-        info.textContent = "⚠ 公開URLが未設定のため、QRコードは表示されません。story.js の SETTINGS.siteUrl に公開URLを書くか、公開したページでこのページを開いてください。";
+        info.textContent = "⚠ 公開URLが未設定のため、QRコードは表示されません。data.js の SETTINGS.siteUrl に公開URLを書くか、公開したページでこのページを開いてください。";
       }
 
       const make = (tag, cls, text) => {
@@ -158,8 +160,10 @@
         const card = make("div", "card");
         card.append(make("div", "stars", "✦ ✧ ✦"));
         card.append(make("div", "text", c.text || ""));
+        // label：合言葉の上の見出し（書かなければ data.js の UI.cardKeyword）
+        const label = c.label || ui.cardKeyword || "";
         if (c.keyword && c.showKeyword !== false) {
-          const kw = make("div", "kw", "合言葉");
+          const kw = make("div", "kw", label);
           kw.append(make("b", null, c.keyword));
           card.append(kw);
         }
@@ -174,7 +178,7 @@
             qr.make();
             const box = make("div", "qr");
             box.innerHTML = qr.createSvgTag({ cellSize: 4, margin: 0, scalable: true });
-            box.append(make("span", null, "スマホのカメラで読みとってね"));
+            box.append(make("span", null, ui.cardQr || ""));
             card.append(box);
             qrNote = url;
           } else {
@@ -183,7 +187,7 @@
         }
         wrap.append(card);
         wrap.append(make("p", "memo",
-          `カード${i + 1}　置き場所メモ：${c.place || "未設定"}\n合言葉：${c.keyword || "なし"}　QR：${qrNote}` +
+          `カード${i + 1}　置き場所メモ：${c.place || "未設定"}\n${label || "合言葉"}：${c.keyword || "なし"}　QR：${qrNote}` +
           (c.blank ? `\n空らん：${c.blank}` : "")));
         sheet.append(wrap);
       });

@@ -2,14 +2,15 @@
    engine.js ― ゲームを動かす仕組み
    ----------------------------------------------------------------
    ふだんは編集しなくて大丈夫です。
-     ・会話、選択肢、合言葉、カードを変える → story.js
-     ・夢の部屋の地図を変える               → room.js
+     ・会話、選択肢、合言葉、カード、画面の文字を変える → data.js
+     ・夢の部屋の地図を変える                         → room.js
+   ※ このファイルには文章を書きません。画面に出る文章は data.js にまとめます。
    ================================================================ */
 (() => {
   "use strict";
 
   // ==============================================================
-  // 1. 準備：story.js / room.js が読み込めたか確認する
+  // 1. 準備：data.js / room.js が読み込めたか確認する
   // ==============================================================
   const app = document.getElementById("app");
   const tryGet = (fn) => {
@@ -21,6 +22,8 @@
   const SCN = tryGet(() => SCENES);
   const KEYS = tryGet(() => KEYWORDS) || {};
   const PARTY = tryGet(() => EIGHT) || [];
+  const TX = tryGet(() => UI) || {};
+  const PZ = tryGet(() => PUZZLE);
   const RM = tryGet(() => ROOM);
 
   if (!S || !CHARS || !SCN) {
@@ -56,7 +59,55 @@
   }
 
   const toArray = (v) => (v == null ? [] : Array.isArray(v) ? v : [v]);
-  const fill = (t) => String(t == null ? "" : t).replace(/\{name\}/g, S.playerName || "きみ");
+
+  // 文章の { } を置きかえる
+  //   {name}          → 主人公の名前（遊ぶ人が入力したもの）
+  //   {station} など  → SETTINGS.hidden に「表示用に隠す」形で書いた文字
+  function fill(t) {
+    return String(t == null ? "" : t).replace(/\{(\w+)\}/g, (whole, key) => {
+      if (key === "name") return state.name || S.defaultName || "";
+      const hidden = S.hidden && S.hidden[key];
+      return hidden ? unhide(hidden) : whole;
+    });
+  }
+
+  // 画面の文字（data.js の UI）を取り出す。{n} などは vars の値に置きかえる
+  function T(key, vars) {
+    const s = TX[key] == null ? key : String(TX[key]);
+    return fill(vars ? s.replace(/\{(\w+)\}/g, (whole, k) => (k in vars ? String(vars[k]) : whole)) : s);
+  }
+
+  // 表示用に隠す：駅名など、ページに直接書きたくない文字を読めない形にする（元に戻せる）
+  // data.js では "~" で始まる文字として書く（SETTINGS.hidden）
+  const HIDE_KEY = "eevee-dream";
+  function hide(s) {
+    const bytes = new TextEncoder().encode(String(s));
+    let bin = "";
+    bytes.forEach((b, i) => { bin += String.fromCharCode(b ^ HIDE_KEY.charCodeAt(i % HIDE_KEY.length)); });
+    return "~" + btoa(bin);
+  }
+  function unhide(s) {
+    const str = String(s == null ? "" : s);
+    if (!str.startsWith("~")) return str;
+    try {
+      const bin = atob(str.slice(1));
+      const bytes = Uint8Array.from(bin, (ch, i) => ch.charCodeAt(0) ^ HIDE_KEY.charCodeAt(i % HIDE_KEY.length));
+      return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    } catch (e) { return ""; }
+  }
+
+  // 条件つきの行・選択肢
+  //   { if: "indoor" } はその条件のときだけ、{ unless: "indoor" } はそうでないときだけ出す
+  //   条件の名前は、set で記録したもの（state.flags）か、SETTINGS の true / false
+  function flagOn(name) {
+    return state.flags.includes(name) || S[name] === true;
+  }
+  function visible(item) {
+    if (!item || typeof item !== "object") return true;
+    if (item.if != null && !toArray(item.if).every(flagOn)) return false;
+    if (item.unless != null && toArray(item.unless).some(flagOn)) return false;
+    return true;
+  }
 
   // 答えの比較用：ひらがな/カタカナ・全角/半角・空白・記号のちがいをなくす
   function norm(s) {
@@ -69,7 +120,7 @@
   }
 
   // 答えを読めない形（暗号）にする：駅名など、ページに書きたくない答え用
-  // story.js では answers: ["#1a2b3c4d"] のように「#」で始めて書く
+  // data.js では answers: ["#1a2b3c4d"] のように「#」で始めて書く
   function secret(s) {
     const t = "eevee:" + norm(s);
     let h = 0x811c9dc5;
@@ -87,11 +138,20 @@
     });
   }
 
-  // 言葉 "ミステ【リ】ー" → 【 】の文字を光らせて表示する
+  // 仲間からもらう言葉（最後の謎で使う。文字は光らせない）
   function wordNode(w, cls) {
-    const parts = String(w == null ? "" : w).split(/【(.+?)】/);
-    return el("span", { class: "word" + (cls ? " " + cls : "") },
-      parts.map((p, i) => (i % 2 ? el("mark", { text: p }) : p)));
+    return el("span", { class: "word" + (cls ? " " + cls : ""), text: String(w == null ? "" : w) });
+  }
+
+  // 入力欄（名前を入れるときは、長すぎないようにする）
+  function inputField(spec, cls, enter) {
+    return el("input", {
+      type: "text", class: cls,
+      placeholder: fill(spec.placeholder || T(spec.name ? "namePlaceholder" : "inputPlaceholder")),
+      maxlength: spec.name ? 12 : null,
+      autocomplete: "off", autocapitalize: "off", autocorrect: "off", spellcheck: "false",
+      enterkeyhint: enter, "aria-label": fill(spec.prompt || T("inputPrompt")),
+    });
   }
 
   // 話し手の名前（または ID）→ キャラクターID
@@ -102,9 +162,11 @@
   }
 
   // "イーブイ：こんにちは" → { who: "eevee", text: "こんにちは" }
+  // { if: "indoor", text: "イーブイ：…" } のような条件つきの行も、同じように読む
   function parseLine(line) {
     if (line && typeof line === "object") {
-      return { who: CHARS[line.who] ? line.who : null, text: fill(line.text) };
+      if (line.who) return { who: CHARS[line.who] ? line.who : null, text: fill(line.text) };
+      return parseLine(line.text);
     }
     const s = String(line == null ? "" : line);
     const m = s.match(/^([^：:「」\n]{1,12})[：:]([\s\S]*)$/);
@@ -115,12 +177,12 @@
     return { who: null, text: fill(s.replace(/^[：:]/, "")), suspect };
   }
 
-  // 場面の会話に出てくる話し手（最大3人）
+  // 場面の会話に出てくる話し手（最大3人。声だけの人物は除く）
   function speakersOf(lines) {
     const ids = [];
-    for (const ln of toArray(lines)) {
+    for (const ln of toArray(lines).filter(visible)) {
       const who = parseLine(ln).who;
-      if (who && who !== "hero" && !ids.includes(who)) ids.push(who);
+      if (who && who !== "hero" && !CHARS[who].voice && !ids.includes(who)) ids.push(who);
     }
     return ids.slice(0, 3);
   }
@@ -143,7 +205,8 @@
       try { localStorage.removeItem(SAVE_KEY); } catch (e) { /* 何もしない */ }
     },
   };
-  const freshState = () => ({ scene: null, met: [], words: [], chapter: "", bg: "" });
+  // name：主人公の名前 / flags：set で記録した条件 / atEnd：章の終わりの画面にいる
+  const freshState = () => ({ scene: null, met: [], words: [], flags: [], name: "", chapter: "", bg: "", atEnd: false });
   let state = freshState();
   let gen = 0;            // 場面が変わるたびに増える番号（古いタイマーを無効にする）
   let currentView = "";
@@ -198,15 +261,16 @@
     const chars = el("div", { class: "chars", "aria-hidden": "true" });
     const roomBox = el("div", { class: "room-wrap", hidden: true });
     const iceBox = el("div", { class: "ice-box", hidden: true });
+    const puzzleBox = el("div", { class: "puzzle-box", hidden: true });
     const layer = el("div", { class: "stage-layer" });
-    const draft = el("div", { class: "draft-badge", text: "仮の内容", hidden: true });
-    const stage = el("div", { class: "stage" }, chars, roomBox, iceBox, layer, draft);
+    const draft = el("div", { class: "draft-badge", text: T("draft"), hidden: true });
+    const stage = el("div", { class: "stage" }, chars, roomBox, iceBox, puzzleBox, layer, draft);
     const name = el("div", { class: "nameplate", hidden: true });
     const text = el("div", { class: "text" });
     const mark = el("div", { class: "next-mark", text: "▼", hidden: true, "aria-hidden": "true" });
     const box = el("div", { class: "textbox", tabindex: "0" }, name, text, mark);
     const root = el("section", { class: "screen novel" }, topbar, stage, box);
-    return { root, chapter, partyBtn, chars, roomBox, iceBox, layer, draft, stage, name, text, mark, box };
+    return { root, chapter, partyBtn, chars, roomBox, iceBox, puzzleBox, layer, draft, stage, name, text, mark, box };
   }
 
   // 文字を1文字ずつ表示する
@@ -244,32 +308,39 @@
     if (node) novel.layer.replaceChildren(node);
     else novel.layer.replaceChildren();
     novel.stage.classList.toggle("has-layer", Boolean(node) && !node.classList.contains("room-done"));
+    // 最後の謎の枠が、入力欄に隠れないように、入力欄の高さを伝える
+    novel.stage.style.setProperty("--layer-h", node ? `${novel.layer.offsetHeight}px` : "0px");
   }
 
-  function charNode(id) {
+  function charNode(id, i) {
     const c = CHARS[id];
-    return el("div", { class: "char", "data-id": id, style: `--c:${c.color || "#999"}` },
+    return el("div", { class: "char", "data-id": id, style: `--c:${c.color || "#999"};--i:${i}` },
       el("div", { class: "char-face", text: c.emoji || "？" }),
       el("div", { class: "char-name", text: c.name || "" }));
   }
 
-  function renderChars(ids) {
-    NV.shown = ids.filter((id) => CHARS[id] && id !== "hero").slice(0, 3);
+  // crowd：4匹以上を小さく並べて、1匹ずつ現れるようにする（最終章）
+  function renderChars(ids, crowd) {
+    NV.shown = ids.filter((id) => CHARS[id] && id !== "hero" && !CHARS[id].voice).slice(0, crowd ? 12 : 3);
+    novel.chars.classList.toggle("crowd", Boolean(crowd));
     novel.chars.replaceChildren(...NV.shown.map(charNode));
   }
+
+  // 地図・氷の床・最後の謎の枠を表示しているか（そのときはキャラクターを出さない）
+  const stageBusy = () => !novel.roomBox.hidden || !novel.iceBox.hidden || !novel.puzzleBox.hidden;
 
   function setSpeaker(who) {
     const c = who ? CHARS[who] : null;
     novel.name.hidden = !c || !c.name;
     if (c) {
-      novel.name.textContent = c.name;
+      novel.name.textContent = who === "hero" ? fill("{name}") : c.name;
       novel.name.style.setProperty("--c", c.color || "#999");
     }
     novel.box.classList.toggle("narration", !c);
-    // 会話にだけ出てくるキャラクターも、空きがあれば表示する
-    if (c && who !== "hero" && novel.roomBox.hidden && novel.iceBox.hidden && !NV.shown.includes(who) && NV.shown.length < 3) {
+    // 会話にだけ出てくるキャラクターも、空きがあれば表示する（声だけの人物は出さない）
+    if (c && who !== "hero" && !c.voice && !stageBusy() && !NV.shown.includes(who) && NV.shown.length < 3) {
       NV.shown.push(who);
-      novel.chars.append(charNode(who));
+      novel.chars.append(charNode(who, NV.shown.length - 1));
     }
     for (const node of novel.chars.children) {
       node.classList.toggle("speaking", node.dataset.id === who);
@@ -329,6 +400,11 @@
       ICE.move = null;
       novel.iceBox.hidden = true;
       novel.iceBox.replaceChildren();
+      novel.puzzleBox.hidden = true;
+      novel.puzzleBox.replaceChildren();
+      const prevCrowd = NV.crowd || "";
+      NV.crowd = "";
+      novel.chars.classList.remove("crowd", "settled");
       if (sc.ice) {
         novel.chars.replaceChildren();
         NV.shown = [];
@@ -341,10 +417,24 @@
         NV.shown = [];
         novel.roomBox.hidden = false;
         renderRoom(novel.roomBox, null, NV.dark);
+      } else if (sc.puzzle) {
+        novel.chars.replaceChildren();
+        NV.shown = [];
+        novel.roomBox.hidden = true;
+        novel.roomBox.replaceChildren();
+        novel.puzzleBox.hidden = false;
+        renderPuzzle(novel.puzzleBox);
       } else {
         novel.roomBox.hidden = true;
         novel.roomBox.replaceChildren();
-        renderChars(sc.show ? toArray(sc.show) : speakersOf(sc.lines));
+        const ids = sc.show ? toArray(sc.show) : speakersOf(sc.lines);
+        const crowd = Boolean(sc.show) && ids.length > 3;
+        renderChars(ids, crowd);
+        // 同じ仲間が続けて並ぶ場面では、もう一度1匹ずつ現れる動きをしない
+        if (crowd) {
+          NV.crowd = ids.join(",");
+          novel.chars.classList.toggle("settled", NV.crowd === prevCrowd);
+        }
       }
       setSpeaker(null);
     },
@@ -352,7 +442,7 @@
     // lines を順に表示し、終わったら then を呼ぶ
     // hold が true なら、最後の行のあとにもう一度クリックを待つ
     say(lines, then, hold = true) {
-      NV.lines = toArray(lines).map(parseLine);
+      NV.lines = toArray(lines).filter(visible).map(parseLine);
       NV.then = then;
       NV.hold = hold;
       setLayer(null);
@@ -377,11 +467,7 @@
 
     input(spec, onSubmit, onHint, onSkip) {
       novel.mark.hidden = true;
-      const field = el("input", {
-        type: "text", class: "text-input", placeholder: spec.placeholder || "ここに入力",
-        autocomplete: "off", autocapitalize: "off", autocorrect: "off", spellcheck: "false",
-        enterkeyhint: "done", "aria-label": fill(spec.prompt || "答え"),
-      });
+      const field = inputField(spec, "text-input", "done");
       const form = el("form", {
         class: "input-panel",
         onsubmit: (e) => {
@@ -394,18 +480,18 @@
         },
         onclick: (e) => e.stopPropagation(),
       },
-        el("div", { class: "input-prompt", text: fill(spec.prompt || "答えを入力してね") }),
+        el("div", { class: "input-prompt", text: fill(spec.prompt || T("inputPrompt")) }),
         field,
         el("div", { class: "input-buttons" },
           onSkip ? el("button", {
-            type: "button", class: "btn ghost", text: fill(spec.skip.text || "どうしてもわからない"),
+            type: "button", class: "btn ghost", text: fill(spec.skip.text || T("skip")),
             onclick: () => { setLayer(null); onSkip(); },
           }) : null,
           onHint ? el("button", {
-            type: "button", class: "btn", text: "ヒント",
+            type: "button", class: "btn", text: T("hint"),
             onclick: () => { setLayer(null); onHint(); },
           }) : null,
-          el("button", { type: "submit", class: "btn primary", text: "けってい" })));
+          el("button", { type: "submit", class: "btn primary", text: T("submit") })));
       setLayer(form);
       if (!TOUCH) field.focus({ preventScroll: true });
     },
@@ -415,13 +501,13 @@
       const c = CHARS[id] || {};
       novel.mark.hidden = true;
       openOverlay(el("div", { class: "panel word-panel", style: `--c:${c.color || "#ccc"}` },
-        el("div", { class: "word-get", text: "✦ 言葉を手に入れた ✦" }),
+        el("div", { class: "word-get", text: T("wordGet") }),
         el("div", { class: "word-from" },
           el("span", { class: "word-avatar", text: c.emoji || "？", "aria-hidden": "true" }),
-          `${c.name || ""}からの言葉`),
+          T("wordFrom", { who: c.name || "" })),
         wordNode(c.word, "big"),
-        el("p", { class: "panel-note", text: "なかまノート（📖）に書きこまれた。" }),
-        el("button", { class: "btn primary", type: "button", text: "OK", onclick: closeOverlay })), then);
+        el("p", { class: "panel-note", text: T("wordNote") }),
+        el("button", { class: "btn primary", type: "button", text: T("ok"), onclick: closeOverlay })), then);
     },
 
     // 地図を調べる
@@ -430,13 +516,13 @@
       novel.mark.hidden = true;
       setSpeaker(null);
       const dark = NV.dark;
-      novel.text.textContent = fill(sc.exploreText || (RM && RM.exploreText) || "気になる場所を調べてみよう。");
+      novel.text.textContent = fill(sc.exploreText || (RM && RM.exploreText) || T("explore"));
       const needFind = Boolean(RM) && RM.requireFind !== false && (RM.items || []).some((it) => it.shine);
       let found = !needFind;
       const showDone = () => {
         if (novel.layer.querySelector(".room-done")) return;
         setLayer(el("button", {
-          class: "btn primary room-done", type: "button", text: sc.roomDone || "▶ つぎへ",
+          class: "btn primary room-done", type: "button", text: sc.roomDone || T("roomDone"),
           onclick: (e) => {
             e.stopPropagation();
             if (NV.typer) { NV.typer.cancel(); NV.typer = null; }
@@ -452,7 +538,7 @@
         let doneNow = false;
         // 暗い部屋では、家具の名前がはっきりしない文章にする
         const said = dark
-          ? item.dark || (item.shine ? "リングの形の光だ……！" : `暗くて、よく見えない。……${item.name}、かな？`)
+          ? item.dark || (item.shine ? T("darkShine") : T("darkDefault", { item: item.name || "" }))
           : item.text || item.name || "";
         const handle = typeInto(novel.text, fill(said), () => {
           doneNow = true;
@@ -480,8 +566,8 @@
       NV.mode = "ice";
       novel.mark.hidden = true;
       setSpeaker(null);
-      const help = fill(spec.help || "矢印キー（または ボタン・スワイプ）で、すべる方向を選ぼう。");
-      const status = () => { novel.text.textContent = `${help}\nすべった回数：${moves}`; };
+      const help = fill(spec.help || T("iceHelp"));
+      const status = () => { novel.text.textContent = `${help}\n${T("iceCount", { n: moves })}`; };
       const arrows = { up: "↑", left: "←", right: "→", down: "↓" };
       const names = { up: "上へすべる", left: "左へすべる", right: "右へすべる", down: "下へすべる" };
       const pad = el("div", { class: "ice-pad" },
@@ -492,7 +578,7 @@
       const skipBox = el("div", { class: "ice-skip" });
       const controls = el("div", { class: "ice-controls", onclick: (e) => e.stopPropagation() },
         pad,
-        el("button", { type: "button", class: "btn ice-reset", text: "↺ やりなおす", onclick: () => reset() }),
+        el("button", { type: "button", class: "btn ice-reset", text: T("iceReset"), onclick: () => reset() }),
         skipBox);
       view.wrap.append(controls);
       status();
@@ -506,7 +592,7 @@
         if (!onSkip || skipBox.childNodes.length) return;
         if (resets < (spec.skip.after == null ? 2 : spec.skip.after)) return;
         skipBox.append(el("button", {
-          type: "button", class: "btn ghost", text: fill(spec.skip.text || "むずかしい……"),
+          type: "button", class: "btn ghost", text: fill(spec.skip.text || T("iceSkip")),
           onclick: () => { finish(); onSkip(); },
         }));
       };
@@ -540,8 +626,8 @@
           finish();
           view.board.classList.add("cleared");
           novel.text.textContent = moves <= best
-            ? `クリア！　${moves}回でたどりついた。最短記録だ！`
-            : `クリア！　${moves}回でたどりついた。（最短は${best}回）`;
+            ? T("iceBest", { n: moves })
+            : T("iceClear", { n: moves, best });
           setTimeout(() => { if (token === gen) onClear(); }, 1200);
         }, ms + 40);
       };
@@ -568,7 +654,7 @@
   };
 
   // ==============================================================
-  // 氷の床のパズル（story.js の ice）
+  // 氷の床のパズル（data.js の ice）
   //   map の文字：. 氷 / # 岩 / S スタート / G ゴール（ぶつかるとクリア）
   //   すべり出すと、岩・かべ・ゴールにぶつかるまで止まれない
   // ==============================================================
@@ -703,6 +789,32 @@
     container.replaceChildren(room);
   }
 
+  // 最後の謎の枠を描く（data.js の PUZZLE。表示するだけで、答えは入力欄で受ける）
+  //   □：言葉が入るマス　・：マスなし　それ以外：最初から書いてある文字（「ー」など）
+  //   answerColumn の列には色をつける
+  function renderPuzzle(container) {
+    if (!PZ) {
+      container.replaceChildren();
+      return;
+    }
+    const rows = toArray(PZ.rows).map((r) => Array.from(String(r)));
+    const cols = Math.max(0, ...rows.map((r) => r.length));
+    const answer = Number(PZ.answerColumn) || 0;
+    const grid = el("div", { class: "puzzle-grid", style: `--cols:${cols};--rows:${rows.length}`, role: "img", "aria-label": fill(PZ.note || "") });
+    rows.forEach((r) => {
+      for (let x = 0; x < cols; x++) {
+        const ch = r[x] || "・";
+        const none = ch === "・" || ch === " " || ch === "　";
+        grid.append(el("div", {
+          class: "pz-cell" + (none ? " none" : "") + (!none && x + 1 === answer ? " answer" : ""),
+        }, none || ch === "□" ? null : ch));
+      }
+    });
+    container.replaceChildren(el("div", { class: "puzzle-wrap" },
+      grid,
+      PZ.note ? el("p", { class: "puzzle-note", text: fill(PZ.note) }) : null));
+  }
+
   // ==============================================================
   // 6. メッセージ画面（iPhone向け：チャット形式）
   // ==============================================================
@@ -713,7 +825,7 @@
     const head = el("header", { class: "chat-head" }, title, partyBtn, menuBtn);
     const log = el("div", { class: "chat-log", role: "log", "aria-live": "polite" });
     const foot = el("div", { class: "chat-foot" });
-    const draft = el("div", { class: "draft-badge", text: "仮の内容", hidden: true });
+    const draft = el("div", { class: "draft-badge", text: T("draft"), hidden: true });
     const root = el("section", { class: "screen chat" }, head, log, foot, draft);
     return { root, title, partyBtn, log, foot, draft };
   }
@@ -769,7 +881,7 @@
         CV.lastWho = undefined;
         CV.chapter = "";
       }
-      chat.title.textContent = fill(sc.chatTitle || S.chatTitle || "メッセージ");
+      chat.title.textContent = fill(sc.chatTitle || S.chatTitle || T("chatTitle"));
       chat.draft.hidden = !sc.draft;
       chat.foot.replaceChildren();
       if (state.chapter && state.chapter !== CV.chapter) {
@@ -780,7 +892,7 @@
 
     // 「入力中…」を出してから、メッセージを1つずつ表示する
     say(lines, then) {
-      const items = toArray(lines).map(parseLine);
+      const items = toArray(lines).filter(visible).map(parseLine);
       const token = gen;
       chat.foot.replaceChildren();
       let i = 0;
@@ -828,11 +940,7 @@
     },
 
     input(spec, onSubmit, onHint, onSkip) {
-      const field = el("input", {
-        type: "text", class: "chat-text", placeholder: spec.placeholder || "ここに入力",
-        autocomplete: "off", autocapitalize: "off", autocorrect: "off", spellcheck: "false",
-        enterkeyhint: "send", "aria-label": fill(spec.prompt || "答え"),
-      });
+      const field = inputField(spec, "chat-text", "send");
       const form = el("form", {
         class: "chat-form",
         onsubmit: (e) => {
@@ -844,17 +952,17 @@
           addMsg({ who: "hero", text: value });
           onSubmit(value);
         },
-      }, field, el("button", { type: "submit", class: "send-btn", text: "送信" }));
-      const skipText = onSkip ? fill(spec.skip.text || "どうしてもわからない") : "";
+      }, field, el("button", { type: "submit", class: "send-btn", text: T("send") }));
+      const skipText = onSkip ? fill(spec.skip.text || T("skip")) : "";
       chat.foot.replaceChildren(
         spec.prompt ? el("div", { class: "foot-prompt", text: fill(spec.prompt) }) : null,
         form,
         onHint || onSkip ? el("div", { class: "foot-links" },
           onHint ? el("button", {
-            type: "button", class: "hint-btn", text: "💡 ヒントをもらう",
+            type: "button", class: "hint-btn", text: T("chatHint"),
             onclick: () => {
               chat.foot.replaceChildren();
-              addMsg({ who: "hero", text: "ヒントがほしい！" });
+              addMsg({ who: "hero", text: T("chatHintSay") });
               onHint();
             },
           }) : null,
@@ -877,16 +985,16 @@
       CV.lastWho = undefined;
       chat.log.append(el("div", { class: "msg word-msg", style: `--c:${c.color || "#ccc"}` },
         el("div", { class: "word-card" },
-          el("div", { class: "word-get", text: `✦ ${c.name || ""}から 言葉をもらった ✦` }),
+          el("div", { class: "word-get", text: T("wordGetChat", { who: c.name || "" }) }),
           wordNode(c.word, "big"),
-          el("div", { class: "word-note", text: "なかまノート（📖）に書きこまれた" }))));
+          el("div", { class: "word-note", text: T("wordNote") }))));
       scrollChat();
       setTimeout(() => { if (token === gen) then(); }, S.textSpeed ? 700 : 0);
     },
 
     proceed(cb) {
       chat.foot.replaceChildren(el("button", {
-        type: "button", class: "next-btn", text: "つづける ▶",
+        type: "button", class: "next-btn", text: T("next"),
         onclick: () => { chat.foot.replaceChildren(); cb(); },
       }));
       scrollChat();
@@ -896,7 +1004,7 @@
   // ==============================================================
   // 7. 場面の進め方（どちらの画面でも共通）
   // ==============================================================
-  // story.js の中で、その場面より前に書かれた一番近い値（章の名前・背景）
+  // data.js の中で、その場面より前に書かれた一番近い値（章の名前・背景）
   function inherited(id, key) {
     let value = "";
     for (const [sid, sc] of Object.entries(SCN)) {
@@ -910,7 +1018,7 @@
   function runScene(id, jump = false) {
     const sc = SCN[id];
     if (!sc) {
-      toast(`場面「${id}」が見つかりません`);
+      toast(T("noScene", { id }));
       return;
     }
     gen += 1;
@@ -919,17 +1027,24 @@
     if (NV.typer) { NV.typer.cancel(); NV.typer = null; }
     CV.skip = null;
     state.scene = id;
+    state.atEnd = false;
     state.chapter = sc.chapter || (jump ? inherited(id, "chapter") : state.chapter);
     state.bg = sc.bg || (jump ? inherited(id, "bg") : state.bg);
     applyMeet(sc);
+    setFlags(sc);
     storage.save(state);
     if (DEBUG) debugNow(id);
     const view = sc.mode === "chat" ? ChatView : NovelView;
     view.enter(sc);
-    // 選択肢・入力・地図がある場面は、最後の行のあとすぐに表示する
-    const waitsForPlayer = Boolean(sc.choices || sc.input || (sc.room && view === NovelView));
+    // 選択肢・入力・調べる地図がある場面は、最後の行のあとすぐに表示する
+    const waitsForPlayer = Boolean(hasChoices(sc) || sc.input || (explorable(sc) && view === NovelView));
     view.say(sc.lines, () => afterLines(sc, view), !waitsForPlayer);
   }
+
+  // room: "look" は地図を見せるだけ（調べない）
+  const explorable = (sc) => Boolean(sc.room) && sc.room !== "look";
+  // 条件に合う選択肢が1つでもあるか
+  const hasChoices = (sc) => toArray(sc.choices).some(visible);
 
   function afterLines(sc, view) {
     const next = () => giveWord(sc, view, () => leave(sc, view));
@@ -940,11 +1055,17 @@
         skip ? () => view.say(toArray(skip.reply), () => runScene(skip.next), true) : null);
       return;
     }
-    if (sc.room && view === NovelView) {
+    if (explorable(sc) && view === NovelView) {
       view.explore(sc, next);
       return;
     }
     next();
+  }
+
+  // set: "indoor" → 条件の名前を記録する / unset: "indoor" → 消す（場面にも選択肢にも書ける）
+  function setFlags(item) {
+    for (const f of toArray(item.set)) if (!state.flags.includes(f)) state.flags.push(f);
+    for (const f of toArray(item.unset)) state.flags = state.flags.filter((x) => x !== f);
   }
 
   // give: "glaceon" → 会話のあとに、その仲間の言葉を手に入れる
@@ -960,7 +1081,7 @@
   }
 
   function leave(sc, view) {
-    if (sc.choices) return askChoice(sc, view);
+    if (hasChoices(sc)) return askChoice(sc, view);
     if (sc.input) return askInput(sc, view);
     if (sc.end) return view === ChatView ? view.proceed(() => showEnd(sc)) : showEnd(sc);
     if (sc.next) return view.proceed(() => runScene(sc.next));
@@ -968,26 +1089,35 @@
   }
 
   function askChoice(sc, view) {
-    view.choices(toArray(sc.choices), (c) => {
+    view.choices(toArray(sc.choices).filter(visible), (c) => {
+      setFlags(c);
+      storage.save(state);
       view.say(toArray(c.reply), () => (c.next ? runScene(c.next) : askChoice(sc, view)), Boolean(c.next));
     });
   }
 
   // misses：まちがえた回数（skip の「どうしてもわからない」を出すために数える）
-  function askInput(sc, view, misses = 0) {
+  // hints ：ヒントを見た回数（ヒントは押すたびに1つずつ出す。最後のヒントは何度でも）
+  function askInput(sc, view, misses = 0, hints = 0) {
     const spec = sc.input;
-    const onHint = spec.hint
-      ? () => view.say(toArray(spec.hint), () => askInput(sc, view, misses), false)
+    const hintList = toArray(spec.hint);
+    const onHint = hintList.length
+      ? () => view.say(toArray(hintList[Math.min(hints, hintList.length - 1)]), () => askInput(sc, view, misses, hints + 1), false)
       : null;
     const skip = spec.skip && spec.skip.next ? spec.skip : null;
     const onSkip = skip && misses >= (skip.after == null ? 2 : skip.after)
       ? () => view.say(toArray(skip.reply), () => runScene(skip.next), true)
       : null;
     view.input(spec, (text) => {
-      if (isAnswer(text, spec.answers)) {
+      // name: true → 入力した文字を、主人公の名前として記録する（正解・不正解はない）
+      if (spec.name) {
+        state.name = Array.from(text).slice(0, 12).join("");
+        storage.save(state);
+        view.say(toArray(spec.correct), () => runScene(spec.next), true);
+      } else if (isAnswer(text, spec.answers)) {
         view.say(toArray(spec.correct), () => runScene(spec.next), true);
       } else {
-        view.say(toArray(spec.wrong || "……ちがうみたい。もう一度ためしてみよう。"), () => askInput(sc, view, misses + 1), false);
+        view.say(toArray(spec.wrong || T("wrong")), () => askInput(sc, view, misses + 1, hints), false);
       }
     }, onHint, onSkip);
   }
@@ -1004,23 +1134,25 @@
     // 1匹だけ新しく会ったときに、お知らせを出す
     if (typeof sc.meet === "string" && fresh.length) {
       const c = CHARS[sc.meet];
-      toast(`${c.emoji || ""} ${c.name}が なかまノートに加わった！（${metCount()}/${PARTY.length}）`);
+      toast(T("metToast", { emoji: c.emoji || "", who: c.name, n: metCount(), total: PARTY.length }));
     }
   }
 
-  // 章の終わりの画面
+  // 章の終わりの画面（記録しておき、「つづきから」でこの画面にもどる）
   function showEnd(sc) {
     const e = sc.end || {};
     gen += 1;
+    state.atEnd = true;
+    storage.save(state);
     setBg(endScreen, e.bg || state.bg || "night");
     endScreen.replaceChildren(el("div", { class: "end-card" },
       e.icon ? el("div", { class: "end-icon", text: e.icon, "aria-hidden": "true" }) : null,
       el("h2", { class: "end-title", text: fill(e.title || "") }),
       e.text ? el("p", { class: "end-text", text: fill(e.text) }) : null,
       el("div", { class: "end-buttons" },
-        e.map ? el("button", { class: "btn", type: "button", text: "🗺 夢の部屋の地図を見る", onclick: openMap }) : null,
-        e.next ? el("button", { class: "btn primary", type: "button", text: e.nextLabel || "つづける", onclick: () => runScene(e.next) }) : null,
-        el("button", { class: "btn", type: "button", text: "タイトルへもどる", onclick: showTitle }))));
+        e.map ? el("button", { class: "btn", type: "button", text: T("endMap"), onclick: openMap }) : null,
+        e.next ? el("button", { class: "btn primary", type: "button", text: fill(e.nextLabel || T("endNext")), onclick: () => runScene(e.next) }) : null,
+        el("button", { class: "btn", type: "button", text: T("toTitle"), onclick: showTitle }))));
     show("end");
   }
 
@@ -1044,6 +1176,7 @@
   }
   overlay.addEventListener("click", (e) => { if (e.target === overlay) closeOverlay(); });
 
+  // なかまノート：会った仲間ともらった言葉の一覧。まだ会っていない仲間は空らん
   function openParty() {
     const n = metCount();
     const got = PARTY.filter((id) => state.words.includes(id)).length;
@@ -1052,49 +1185,48 @@
       const met = state.met.includes(id);
       const hasWord = state.words.includes(id) && c.word;
       return el("div", { class: "party-cell" + (met ? " met" : "") },
-        el("div", { class: "party-slot" + (met ? " met" : ""), style: met ? `--c:${c.color || "#ccc"}` : null, text: met ? c.emoji || "？" : "？" }),
+        el("div", { class: "party-slot" + (met ? " met" : ""), style: met ? `--c:${c.color || "#ccc"}` : null, text: met ? c.emoji || "" : "" }),
         el("div", { class: "party-info" },
-          el("div", { class: "party-name", text: met ? c.name : "？？？" }),
-          hasWord ? wordNode(c.word, "party-word") : el("span", { class: "party-word none", text: "―" })));
+          el("div", { class: "party-name", text: met ? c.name : "" }),
+          hasWord ? wordNode(c.word, "party-word") : el("span", { class: "party-word none" })));
     });
-    const note = got >= PARTY.length
-      ? "8つの言葉がそろった！　光っている文字に、注目……！"
-      : n >= PARTY.length ? "8匹ぜんいんに会えた！" : "8匹ぜんいんに会えたら……？";
+    const note = got >= PARTY.length ? T("partyNoteAll") : n >= PARTY.length ? T("partyNoteMet") : T("partyNote");
     openOverlay(el("div", { class: "panel" },
-      el("h2", { text: `📖 なかまノート　${n} / ${PARTY.length}` }),
+      el("h2", { text: T("partyTitle", { n, total: PARTY.length }) }),
       el("div", { class: "party-grid" }, cells),
       el("p", { class: "panel-note", text: note }),
-      el("button", { class: "btn primary", type: "button", text: "とじる", onclick: closeOverlay })));
+      el("button", { class: "btn primary", type: "button", text: T("close"), onclick: closeOverlay })));
   }
 
+  // 夢の部屋の地図は、部屋が明るくなってから（data.js の set: "roomMap"）メニューに出す
   function openMenu() {
     openOverlay(el("div", { class: "panel" },
-      el("h2", { text: "メニュー" }),
-      el("button", { class: "btn", type: "button", text: "📖 なかまノート", onclick: openParty }),
-      RM && state.met.includes("espeon")
-        ? el("button", { class: "btn", type: "button", text: "🗺 夢の部屋の地図", onclick: openMap })
+      el("h2", { text: T("menuTitle") }),
+      el("button", { class: "btn", type: "button", text: T("menuParty"), onclick: openParty }),
+      RM && flagOn("roomMap")
+        ? el("button", { class: "btn", type: "button", text: T("menuMap"), onclick: openMap })
         : null,
-      el("button", { class: "btn", type: "button", text: "🏠 タイトルへもどる", onclick: showTitle }),
-      el("p", { class: "panel-note", text: "記録は、この端末に自動で保存されます。" }),
-      el("button", { class: "btn primary", type: "button", text: "とじる", onclick: closeOverlay })));
+      el("button", { class: "btn", type: "button", text: T("menuToTitle"), onclick: showTitle }),
+      el("p", { class: "panel-note", text: T("menuNote") }),
+      el("button", { class: "btn primary", type: "button", text: T("close"), onclick: closeOverlay })));
   }
 
   function openMap() {
-    const caption = el("p", { class: "map-caption", text: "場所をタップ（クリック）すると、くわしく見られるよ。" });
+    const caption = el("p", { class: "map-caption", text: T("mapCaption") });
     const box = el("div", { class: "map-box" });
     renderRoom(box, (it) => { caption.textContent = fill(it.text || it.name); });
     openOverlay(el("div", { class: "panel map-panel" },
-      el("h2", { text: "🗺 夢の部屋の地図" }),
+      el("h2", { text: T("mapTitle") }),
       box,
       caption,
-      el("button", { class: "btn primary", type: "button", text: "とじる", onclick: closeOverlay })));
+      el("button", { class: "btn primary", type: "button", text: T("close"), onclick: closeOverlay })));
   }
 
   function confirmBox(message, yesLabel, onYes) {
     openOverlay(el("div", { class: "panel" },
       el("p", { class: "panel-text", text: message }),
       el("div", { class: "panel-buttons" },
-        el("button", { class: "btn", type: "button", text: "やめる", onclick: closeOverlay }),
+        el("button", { class: "btn", type: "button", text: T("cancel"), onclick: closeOverlay }),
         el("button", { class: "btn primary", type: "button", text: yesLabel, onclick: () => { closeOverlay(); onYes(); } }))));
   }
 
@@ -1115,9 +1247,9 @@
       el("h1", { class: "title-main", text: S.title || "" }),
       S.subtitle ? el("p", { class: "title-sub", text: S.subtitle }) : null,
       el("div", { class: "title-menu" },
-        canResume ? el("button", { class: "btn primary", type: "button", text: "つづきから", onclick: () => resume(save) }) : null,
-        el("button", { class: canResume ? "btn" : "btn primary", type: "button", text: "はじめから", onclick: () => newGame(canResume) }),
-        el("button", { class: "btn", type: "button", text: "あいことばを入れる", onclick: showKeyword })),
+        canResume ? el("button", { class: "btn primary", type: "button", text: T("resume"), onclick: () => resume(save) }) : null,
+        el("button", { class: canResume ? "btn" : "btn primary", type: "button", text: T("newGame"), onclick: () => newGame(canResume) }),
+        el("button", { class: "btn", type: "button", text: T("keywordButton"), onclick: showKeyword })),
       S.footer ? el("p", { class: "title-foot", text: S.footer }) : null));
     show("title");
   }
@@ -1129,7 +1261,7 @@
       updateParty();
       runScene(S.start);
     };
-    if (hasSave) confirmBox("さいしょから はじめますか？\nいまの記録は消えます。", "はじめから", go);
+    if (hasSave) confirmBox(T("confirmNew"), T("newGame"), go);
     else go();
   }
 
@@ -1137,19 +1269,24 @@
     state = Object.assign(freshState(), save || {});
     if (!Array.isArray(state.met)) state.met = [];
     if (!Array.isArray(state.words)) state.words = [];
+    if (!Array.isArray(state.flags)) state.flags = [];
+    if (typeof state.name !== "string") state.name = "";
     updateParty();
   }
 
+  // 章の終わりの画面で止めていたときは、その画面から再開する
   function resume(save) {
     loadState(save);
-    runScene(state.scene);
+    const sc = SCN[state.scene];
+    if (state.atEnd && sc && sc.end) showEnd(sc);
+    else runScene(state.scene);
   }
 
+  // KEYWORDS は「場面の名前: [合言葉, …]」。# で始まる合言葉は暗号として比べる
   function findKeyword(text) {
-    const n = norm(text);
-    if (!n) return null;
-    for (const [word, id] of Object.entries(KEYS)) {
-      if (norm(word) === n) return id;
+    if (!norm(text)) return null;
+    for (const [id, words] of Object.entries(KEYS)) {
+      if (isAnswer(text, words)) return id;
     }
     return null;
   }
@@ -1164,9 +1301,9 @@
     gen += 1;
     closeOverlay();
     const field = el("input", {
-      type: "text", class: "text-input", placeholder: "ここに合言葉を入力",
+      type: "text", class: "text-input", placeholder: T("keywordPlaceholder"),
       autocomplete: "off", autocapitalize: "off", autocorrect: "off", spellcheck: "false",
-      enterkeyhint: "done", "aria-label": "合言葉",
+      enterkeyhint: "done", "aria-label": T("keywordTitle"),
     });
     const msg = el("p", { class: "kw-msg", "aria-live": "polite" });
     const form = el("form", {
@@ -1175,25 +1312,25 @@
         e.preventDefault();
         const id = findKeyword(field.value);
         if (id) {
-          msg.textContent = "✨ 合言葉が光った！";
+          msg.textContent = T("keywordOk");
           field.blur();
           const token = gen;
           setTimeout(() => { if (token === gen) startFrom(id); }, 800);
         } else {
-          msg.textContent = field.value.trim() ? "……何も起こらない。合言葉がちがうみたい。" : "合言葉を入力してね。";
+          msg.textContent = field.value.trim() ? T("keywordWrong") : T("keywordEmpty");
           field.classList.remove("shake");
           void field.offsetWidth;
           field.classList.add("shake");
         }
       },
-    }, field, el("button", { class: "btn primary", type: "submit", text: "となえる" }));
+    }, field, el("button", { class: "btn primary", type: "submit", text: T("keywordSubmit") }));
     keywordScreen.replaceChildren(el("div", { class: "kw-wrap" },
       el("div", { class: "kw-icon", text: "🔑", "aria-hidden": "true" }),
-      el("h2", { text: "あいことば" }),
-      el("p", { class: "kw-note", text: "カードや画面で見つけた合言葉を入れてね。\nひらがな・カタカナ、どちらでもOK。" }),
+      el("h2", { text: T("keywordTitle") }),
+      el("p", { class: "kw-note", text: T("keywordNote") }),
       form,
       msg,
-      el("button", { class: "btn ghost", type: "button", text: "もどる", onclick: showTitle })));
+      el("button", { class: "btn ghost", type: "button", text: T("back"), onclick: showTitle })));
     show("keyword");
     if (!TOUCH) field.focus({ preventScroll: true });
   }
@@ -1213,10 +1350,10 @@
       showTitle();
       openOverlay(el("div", { class: "panel" },
         el("div", { class: "kw-icon", text: "🔑", "aria-hidden": "true" }),
-        el("p", { class: "panel-text", text: `合言葉「${key}」を受けとった！` }),
+        el("p", { class: "panel-text", text: T("keywordReceived", { key }) }),
         el("div", { class: "panel-buttons column" },
-          el("button", { class: "btn primary", type: "button", text: "前回のつづきから", onclick: () => resume(save) }),
-          el("button", { class: "btn", type: "button", text: "この合言葉の場面からはじめる", onclick: () => startFrom(id) }))));
+          el("button", { class: "btn primary", type: "button", text: T("keywordResume"), onclick: () => resume(save) }),
+          el("button", { class: "btn", type: "button", text: T("keywordStart"), onclick: () => startFrom(id) }))));
       return true;
     }
     startFrom(id);
@@ -1224,8 +1361,23 @@
   }
 
   // ==============================================================
-  // 10. story.js の点検（書きまちがいを見つける）
+  // 10. data.js の点検（書きまちがいを見つける）
   // ==============================================================
+  // ゲームが使う画面の文字（data.js の UI）。消してしまうと、文字の代わりに名前が出る
+  const UI_KEYS = [
+    "resume", "newGame", "keywordButton", "confirmNew", "cancel",
+    "keywordTitle", "keywordNote", "keywordPlaceholder", "keywordSubmit", "keywordOk", "keywordWrong",
+    "keywordEmpty", "keywordReceived", "keywordResume", "keywordStart", "back",
+    "inputPrompt", "inputPlaceholder", "namePlaceholder", "submit", "send", "hint", "chatHint", "chatHintSay",
+    "skip", "wrong", "next", "draft", "chatTitle",
+    "wordGet", "wordFrom", "wordGetChat", "wordNote", "ok", "metToast",
+    "partyTitle", "partyNote", "partyNoteMet", "partyNoteAll", "close",
+    "menuTitle", "menuParty", "menuMap", "menuToTitle", "menuNote",
+    "mapTitle", "mapCaption", "explore", "roomDone", "darkDefault", "darkShine",
+    "iceHelp", "iceCount", "iceReset", "iceSkip", "iceBest", "iceClear",
+    "endNext", "endMap", "toTitle", "noScene",
+  ];
+
   function validate() {
     const errors = [];
     const warnings = [];
@@ -1233,7 +1385,36 @@
     const check = (target, where) => {
       if (target && !ids.has(target)) errors.push(`${where}：「${target}」という場面がありません。`);
     };
+    // { } の置きかえ先があるか（{name} 以外は SETTINGS の hidden に書く）
+    const checkText = (t, where) => {
+      String(t == null ? "" : t).replace(/\{(\w+)\}/g, (whole, key) => {
+        if (key !== "name" && !(S.hidden && S.hidden[key])) {
+          errors.push(`${where}：「{${key}}」に入る文字が、SETTINGS の hidden にありません。`);
+        }
+        return whole;
+      });
+    };
+    const checkLines = (lines, where) => {
+      toArray(lines).forEach((ln, i) => {
+        if (ln && typeof ln === "object" && !ln.who && ln.text == null) {
+          errors.push(`${where} の${i + 1}行目に text（文章）がありません。`);
+          return;
+        }
+        checkText(ln && typeof ln === "object" ? ln.text : ln, where);
+        const p = parseLine(ln);
+        if (p.suspect) warnings.push(`${where} の${i + 1}行目：「${p.suspect}」という話し手がいないため、地の文として表示します。`);
+      });
+    };
+    const checkAnswers = (answers, where) => {
+      for (const a of toArray(answers)) {
+        const s = String(a).trim();
+        if (s.startsWith("#") && !/^#[0-9a-f]{8}$/i.test(s)) errors.push(`${where} の暗号「${s}」の形がおかしいようです（# と英数字8文字）。`);
+      }
+    };
     if (!ids.has(S.start)) errors.push(`SETTINGS の start：「${S.start}」という場面がありません。`);
+    for (const [key, value] of Object.entries(S.hidden || {})) {
+      if (!unhide(value)) errors.push(`SETTINGS の hidden の ${key}：「表示用に隠す」で作った文字（~ で始まる）を書いてください。`);
+    }
     for (const [id, sc] of Object.entries(SCN)) {
       const at = `場面「${id}」`;
       if (!sc || typeof sc !== "object") {
@@ -1241,6 +1422,7 @@
         continue;
       }
       check(sc.next, `${at} の next`);
+      checkLines(sc.lines, at);
       if (sc.choices && !Array.isArray(sc.choices)) errors.push(`${at} の choices は [ ] で囲んでください。`);
       toArray(sc.choices).forEach((c, i) => {
         if (!c || !c.text) {
@@ -1249,18 +1431,22 @@
         }
         if (!c.next && !c.reply) errors.push(`${at} の選択肢「${c.text}」に next も reply もありません。`);
         check(c.next, `${at} の選択肢「${c.text}」`);
+        checkText(c.text, `${at} の選択肢`);
+        checkLines(c.reply, `${at} の選択肢「${c.text}」の reply`);
       });
       if (sc.input) {
-        if (!toArray(sc.input.answers).length) errors.push(`${at} の input に answers（正解）がありません。`);
-        if (!sc.input.next) errors.push(`${at} の input に next（正解したときの行き先）がありません。`);
-        check(sc.input.next, `${at} の input`);
-        for (const a of toArray(sc.input.answers)) {
-          const s = String(a).trim();
-          if (s.startsWith("#") && !/^#[0-9a-f]{8}$/i.test(s)) errors.push(`${at} の暗号の答え「${s}」の形がおかしいようです（# と英数字8文字）。`);
-        }
-        if (sc.input.skip) {
-          if (!sc.input.skip.next) errors.push(`${at} の skip に next（行き先）がありません。`);
-          check(sc.input.skip.next, `${at} の skip`);
+        const inp = sc.input;
+        if (!inp.name && !toArray(inp.answers).length) errors.push(`${at} の input に answers（正解）がありません。`);
+        if (!inp.next) errors.push(`${at} の input に next（正解したときの行き先）がありません。`);
+        check(inp.next, `${at} の input`);
+        checkAnswers(inp.answers, `${at} の input`);
+        checkLines(inp.wrong, `${at} の input の wrong`);
+        checkLines(inp.correct, `${at} の input の correct`);
+        toArray(inp.hint).forEach((h) => checkLines(h, `${at} の input の hint`));
+        if (inp.skip) {
+          if (!inp.skip.next) errors.push(`${at} の skip に next（行き先）がありません。`);
+          check(inp.skip.next, `${at} の skip`);
+          checkLines(inp.skip.reply, `${at} の skip の reply`);
         }
       }
       if (sc.ice) {
@@ -1276,24 +1462,39 @@
         if (!CHARS[g]) errors.push(`${at} の give：「${g}」というキャラクターがいません。`);
         else if (!CHARS[g].word) errors.push(`${at} の give：「${CHARS[g].name}」に word（言葉）が書かれていません。`);
       }
-      if (sc.end) check(sc.end.next, `${at} の end`);
+      if (sc.end) {
+        check(sc.end.next, `${at} の end`);
+        checkText(sc.end.title, `${at} の end`);
+        checkText(sc.end.text, `${at} の end`);
+      }
       if (!sc.next && !sc.choices && !sc.input && !sc.end) {
         errors.push(`${at} に next・choices・input・end のどれもありません（行き止まりになります）。`);
       }
       if (sc.room && !RM) errors.push(`${at} は地図を使いますが、room.js を読み込めませんでした。`);
+      if (sc.room && ![true, "dark", "look"].includes(sc.room)) errors.push(`${at} の room は、true・"dark"・"look" のどれかにしてください。`);
       if (sc.room && sc.mode === "chat") warnings.push(`${at}：メッセージ形式（chat）では地図を表示できません。`);
+      if (sc.puzzle && !PZ) errors.push(`${at} は最後の謎の枠を使いますが、PUZZLE が見つかりません。`);
+      if (sc.puzzle && sc.mode === "chat") warnings.push(`${at}：メッセージ形式（chat）では、最後の謎の枠を表示できません。`);
       for (const m of toArray(sc.meet)) if (!CHARS[m]) errors.push(`${at} の meet：「${m}」というキャラクターがいません。`);
       for (const m of toArray(sc.show)) if (!CHARS[m]) errors.push(`${at} の show：「${m}」というキャラクターがいません。`);
-      toArray(sc.lines).forEach((ln, i) => {
-        const p = parseLine(ln);
-        if (p.suspect) warnings.push(`${at} の${i + 1}行目：「${p.suspect}」という話し手がいないため、地の文として表示します。`);
-      });
     }
-    for (const [word, id] of Object.entries(KEYS)) check(id, `合言葉「${word}」`);
-    for (const id of PARTY) {
-      const w = CHARS[id] && CHARS[id].word;
-      if (w && !/【.+?】/.test(w)) warnings.push(`CHARACTERS の ${id} の言葉「${w}」に、光らせる文字の【 】がありません。`);
+    for (const [id, words] of Object.entries(KEYS)) {
+      check(id, `合言葉の「${id}」`);
+      if (!toArray(words).length) errors.push(`合言葉の「${id}」に、合言葉が書かれていません。`);
+      checkAnswers(words, `合言葉の「${id}」`);
     }
+    if (PZ) {
+      const rows = toArray(PZ.rows).map((r) => Array.from(String(r)));
+      const cols = Math.max(0, ...rows.map((r) => r.length));
+      const answer = Number(PZ.answerColumn) || 0;
+      if (answer < 1 || answer > cols) errors.push("PUZZLE の answerColumn（答えの列）が、枠の外です。");
+      else {
+        rows.forEach((r, i) => {
+          if (!r[answer - 1] || r[answer - 1] === "・") warnings.push(`PUZZLE の${i + 1}行目は、答えの列にマスがありません。`);
+        });
+      }
+    }
+    for (const key of UI_KEYS) if (TX[key] == null) errors.push(`UI（画面の文字）の「${key}」が見つかりません。`);
     if (RM) {
       const cols = RM.cols || 10;
       const rows = RM.rows || 8;
@@ -1309,7 +1510,7 @@
   function showProblems(errors) {
     if (!errors.length) return;
     const banner = el("div", { class: "error-banner", role: "alert" },
-      el("b", { text: `⚠ story.js に ${errors.length} 件の問題があります` }),
+      el("b", { text: `⚠ data.js に ${errors.length} 件の問題があります` }),
       el("ul", {}, errors.slice(0, 6).map((t) => el("li", { text: t }))),
       errors.length > 6 ? el("div", { text: `ほか ${errors.length - 6} 件（?debug をつけて開くと全部見られます）` }) : null);
     banner.append(el("button", { type: "button", class: "banner-close", text: "×", "aria-label": "とじる", onclick: () => banner.remove() }));
@@ -1337,7 +1538,7 @@
     }
   }
 
-  // 答えを入れると、story.js の answers に書く暗号を表示する
+  // 答えを入れると、data.js の answers に書く暗号を表示する
   function secretTool() {
     const field = el("input", { type: "text", class: "debug-input", placeholder: "答えを入力（例：駅名）", autocomplete: "off" });
     const out = el("code", { class: "debug-out", text: "" });
@@ -1351,17 +1552,37 @@
       el("p", { class: "debug-note", text: "漢字とひらがなは別の答えになります。「東京」と「とうきょう」のように、両方の暗号を書いてください。ひらがなとカタカナ、全角と半角のちがいは同じとみなします。" }));
   }
 
+  // 文字を入れると、SETTINGS の hidden に書く「表示用に隠した文字」を表示する
+  function hideTool() {
+    const field = el("input", { type: "text", class: "debug-input", placeholder: "画面に出したい文字（例：駅名）", autocomplete: "off" });
+    const out = el("code", { class: "debug-out", text: "" });
+    field.addEventListener("input", () => {
+      const v = field.value.trim();
+      out.textContent = v ? `"${hide(v)}",　← hidden に貼りつける` : "";
+    });
+    return el("div", { class: "debug-kw" },
+      field, out,
+      el("p", { class: "debug-note", text: "暗号とちがい、元の文字にもどせます（スキップしたときに駅名を見せるため）。ページをのぞいても、すぐには読めない形です。" }));
+  }
+
   function setupDebug(problems) {
     const base = location.href.split(/[?#]/)[0];
     const online = /^https?:$/.test(location.protocol);
     const select = el("select", { class: "debug-select" },
       Object.keys(SCN).map((id) => el("option", { value: id, text: id + (SCN[id].draft ? "（仮）" : "") })));
-    const keyRows = Object.entries(KEYS).map(([word, id]) => {
-      const url = `${base}?key=${encodeURIComponent(word)}`;
+    // 暗号の合言葉（# で始まる）は、URLやQRコードにできないので、数だけ表示する
+    const keyRows = Object.entries(KEYS).map(([id, words]) => {
+      const plain = toArray(words).filter((w) => !String(w).trim().startsWith("#"));
+      const hidden = toArray(words).length - plain.length;
       return el("div", { class: "debug-kw" },
-        el("div", {}, el("b", { text: word }), ` → ${id}`),
-        el("a", { href: `${url}&debug`, text: "この合言葉でひらく" }),
-        online && typeof qrcode === "function" ? qrNode(url) : null);
+        el("div", {}, el("b", { text: plain.join("・") || "（暗号のみ）" }), hidden ? `（ほかに暗号${hidden}つ）` : "", ` → ${id}`),
+        plain.map((w) => {
+          const url = `${base}?key=${encodeURIComponent(w)}`;
+          return [
+            el("a", { href: `${url}&debug`, text: `「${w}」でひらく` }),
+            online && typeof qrcode === "function" ? qrNode(url) : null,
+          ];
+        }));
     });
     const panel = el("div", { class: "debug-panel", hidden: true },
       el("h3", { text: "🛠 テスト用メニュー（本番では表示されません）" }),
@@ -1373,10 +1594,12 @@
         el("button", { type: "button", text: "記録（セーブ）を消す", onclick: () => { storage.clear(); state = freshState(); updateParty(); toast("記録を消しました"); } })),
       el("h4", { text: "答えを暗号にする（駅名など、ページに書きたくない答え用）" }),
       secretTool(),
+      el("h4", { text: "表示用に隠す（駅名・公園名を、画面には出したいとき用）" }),
+      hideTool(),
       el("h4", { text: "合言葉（iPhoneでQRを読むと、その場面から始まる）" }),
       online ? null : el("p", { class: "debug-note", text: "※ QRコードは、インターネット上に公開したページで開いたときだけ表示されます。" }),
       keyRows,
-      el("h4", { text: "story.js の点検結果" }),
+      el("h4", { text: "data.js の点検結果" }),
       problems.errors.length || problems.warnings.length
         ? el("ul", {},
           problems.errors.map((t) => el("li", { class: "debug-error", text: t })),
@@ -1433,7 +1656,7 @@
   if (!handleUrlKey()) showTitle();
 
   // --------------------------------------------------------------
-  // story.js を読み込めなかったときの表示
+  // data.js を読み込めなかったときの表示
   // --------------------------------------------------------------
   function showLoadError() {
     // ファイルを直接開いたときは、ブラウザが詳しい場所を隠す（"Script error."）ので表示しない
@@ -1445,7 +1668,7 @@
     const h = document.createElement("h2");
     h.textContent = "⚠ シナリオを読み込めませんでした";
     const p = document.createElement("p");
-    p.textContent = "story.js に、書きまちがいがあるかもしれません。直前に編集した場所で、次の点を確認してください。";
+    p.textContent = "data.js に、書きまちがいがあるかもしれません。直前に編集した場所で、次の点を確認してください。";
     const ul = document.createElement("ul");
     for (const t of [
       "行の終わりのカンマ「,」の付け忘れ",

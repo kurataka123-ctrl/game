@@ -20,14 +20,14 @@
   <main id="app"></main>
   <noscript>このゲームを遊ぶには、JavaScript を有効にしてください。</noscript>
 
-  <!-- 読み込みエラーを記録する（story.js の書きまちがいを画面で知らせるため） -->
+  <!-- 読み込みエラーを記録する（data.js の書きまちがいを画面で知らせるため） -->
   <script>
     window.__loadErrors = [];
     window.addEventListener("error", function (e) {
       window.__loadErrors.push({ file: e.filename, line: e.lineno, message: e.message });
     });
   </script>
-  <script src="story.js"></script>
+  <script src="data.js"></script>
   <script src="room.js"></script>
   <script src="lib/qrcode.js"></script>
   <script src="engine.js"></script>
