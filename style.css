@@ -550,80 +550,186 @@ button { font: inherit; color: inherit; touch-action: manipulation; }
 }
 .room-missing { padding: 20px; color: #fff; }
 
-/* ---------------- 氷の床のパズル（data.js の ice） ---------------- */
-.ice-box { position: absolute; inset: 0; }
-.ice-wrap {
+/* ---------------- 升目の地図（氷の床のパズル・歩けるマップ） ---------------- */
+/*  地図の形は house.js、床とかべの種類（floor・wall）と出入口の種類（kind）の色は、ここで決める */
+.grid-box { position: absolute; inset: 0; }
+.grid-wrap {
   position: absolute;
   inset: 0;
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: clamp(12px, 4cqw, 40px);
+  gap: clamp(10px, 3cqw, 32px);
   padding: 10px;
 }
-.ice-board {
+.grid-board {
+  --cell: calc(100cqw / var(--bw));   /* 1マスの大きさ */
   position: relative;
   flex: none;
   display: grid;
-  grid-template-columns: repeat(var(--w), 1fr);
-  grid-template-rows: repeat(var(--h), 1fr);
-  width: min(62cqw, calc((100cqh - 24px) * var(--w) / var(--h)));
-  aspect-ratio: var(--w) / var(--h);
-  border: 6px solid #eaf8ff;
+  grid-template-columns: repeat(var(--bw), 1fr);
+  grid-template-rows: repeat(var(--bh), 1fr);
+  width: min(calc(100cqw - 230px), calc((100cqh - 20px) * var(--bw) / var(--bh)), calc(var(--bw) * 76px));
+  aspect-ratio: var(--bw) / var(--bh);
   border-radius: 12px;
-  background: #b9e2f5;
   box-shadow: 0 12px 30px rgba(0, 0, 0, .35);
   overflow: hidden;
   container-type: inline-size;
   touch-action: none;
   cursor: auto;
 }
-.ice-cell {
+/* かべのない氷の床（地図を使わないとき） */
+.grid-board:not(.ringed) { border: 6px solid #eaf8ff; }
+
+.tile {
   display: grid;
   place-items: center;
-  border: 1px solid rgba(255, 255, 255, .45);
-  background: linear-gradient(135deg, #e6f7fe, #bfe4f5 60%, #d6f0fb);
-  font-size: calc(62cqw / var(--w));
+  font-size: calc(var(--cell) * .58);
   line-height: 1;
 }
-.ice-cell.rock { background: linear-gradient(135deg, #a7b2c0, #7d8898); }
-.ice-cell.goal span {
-  width: 86%;
-  height: 86%;
-  border-radius: 50%;
-  display: grid;
-  place-items: center;
-  background: radial-gradient(circle at 32% 28%, rgba(255, 255, 255, .7), transparent 55%), var(--c);
-  box-shadow: 0 0 10px 3px rgba(255, 255, 255, .8);
+/* 床 */
+.floor-ice .tile { border: 1px solid rgba(255, 255, 255, .45); background: linear-gradient(135deg, #e6f7fe, #bfe4f5 60%, #d6f0fb); }
+.floor-flowers .tile {
+  background-color: #a9d88c;
+  background-image:
+    radial-gradient(circle at 24% 30%, #fff 0 6%, transparent 7%),
+    radial-gradient(circle at 70% 68%, #ffc1df 0 7%, transparent 8%),
+    radial-gradient(circle at 66% 22%, #fff19a 0 5%, transparent 6%),
+    radial-gradient(circle at 30% 78%, #f6a9cf 0 5%, transparent 6%);
 }
-.ice-player {
+.floor-trail .tile { background: radial-gradient(circle at 30% 40%, #e3cfa6, #d2b98a 70%); }
+.floor-light .tile { background: radial-gradient(circle at 50% 45%, #fffdf6, #efe6ff 75%); border: 1px solid rgba(170, 140, 230, .12); }
+.floor-grass .tile { background: radial-gradient(circle at 40% 40%, #9fd07f, #84bd68 75%); }
+.tile.rock { background: linear-gradient(135deg, #a7b2c0, #7d8898); }
+/* 雪だるまにこおらされたところ（data.js の frost） */
+.tile.frost { box-shadow: inset 0 0 0 999px rgba(228, 245, 255, .7); }
+
+/* かべ（地図のまわりの1マス） */
+.tile.wall { background: #6d5a48; }
+.wall-hedge .tile.wall {
+  background-color: #3e7a40;
+  background-image:
+    radial-gradient(circle at 30% 30%, #5d9c55 0 28%, transparent 30%),
+    radial-gradient(circle at 72% 68%, #4f8d49 0 28%, transparent 30%);
+}
+.wall-icewall .tile.wall { background: linear-gradient(135deg, #8cc3e3, #5d98c2); }
+.wall-rock .tile.wall { background: linear-gradient(135deg, #a597c6, #7d6ea6); }
+.wall-trees .tile.wall { background: radial-gradient(circle at 50% 40%, #3f7a45, #2b5a33 75%); }
+
+/* かべの出入口・窓（house.js の edges の kind）。かべの色より強くするため .grid-board を付ける */
+.grid-board .tile.edge-gate {
+  background: repeating-linear-gradient(90deg, #b07f4f 0 20%, #8d6239 20% 26%);
+  box-shadow: inset 0 0 0 3px #6e4626;
+}
+.grid-board .tile.edge-door { background: #c8a07c; box-shadow: inset 0 0 0 3px #8d6239; }
+.grid-board .tile.edge-door.opened {
+  background: radial-gradient(circle, #2a2f55, #0b0e22 75%);
+  box-shadow: inset 0 0 0 3px #8d6239, inset 0 0 12px 4px rgba(255, 226, 122, .55);
+}
+.grid-board .tile.edge-open { background: linear-gradient(#d9f0fb, #eef9fe); }
+.grid-board .tile.edge-cave { background: radial-gradient(circle at 50% 50%, #fffbe6, #b8e2f6 80%); }
+.grid-board .tile.edge-icedoor { background: linear-gradient(135deg, #f2fbff, #a9d9f1); box-shadow: inset 0 0 0 2px #fff; }
+.grid-board .tile.edge-sun { background: radial-gradient(circle, #fff8cf, #ffd96b 80%); }
+.grid-board .tile.edge-light { background: radial-gradient(circle, #ffffff, #f3eaff 80%); }
+.grid-board .tile.edge-fog { background: #eef2f7; }
+.grid-board .tile.edge-thicket { background: radial-gradient(circle, #5c8a46, #3d6631 80%); }
+
+/* 家具（第1部では、自然のものに見せる） */
+.grid-item {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  padding: 2px;
+  border: 2px solid rgba(60, 40, 20, .28);
+  border-radius: calc(var(--cell) * .2);
+  background: var(--c);
+  color: #3a2f28;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, .18);
+  overflow: hidden;
+  pointer-events: none;
+}
+.grid-icon { font-size: calc(var(--cell) * .52); line-height: 1; }
+.grid-label {
+  font-size: max(10px, calc(var(--cell) * .25));
+  font-weight: 700;
+  line-height: 1.15;
+  white-space: nowrap;
+}
+.grid-item.tall .grid-icon { font-size: calc(var(--cell) * .4); }
+.grid-item.tall .grid-label { writing-mode: vertical-rl; font-size: max(9px, calc(var(--cell) * .2)); }
+.grid-item.look-stump {
+  border-radius: 46%;
+  background: repeating-radial-gradient(ellipse, #dcb27a 0 7%, #b98a51 7% 10%);
+}
+.grid-item.look-stump .grid-label { padding: 0 4px; border-radius: 6px; background: rgba(255, 245, 225, .78); }
+.grid-item.look-fog {
+  border: 0;
+  border-radius: 0;
+  background: radial-gradient(ellipse at 50% 50%, rgba(255, 255, 255, .98), rgba(236, 241, 248, .9) 75%);
+  box-shadow: none;
+  color: #7f8b9b;
+}
+
+/* 人物・自分（🦊）・目の前の印 */
+.grid-npc, .grid-player, .grid-front {
   position: absolute;
   left: 0;
   top: 0;
-  width: calc(100% / var(--w));
-  height: calc(100% / var(--h));
+  width: calc(100% / var(--bw));
+  height: calc(100% / var(--bh));
   display: grid;
   place-items: center;
-  font-size: calc(62cqw / var(--w));
-  line-height: 1;
   transform: translate(calc(var(--x, 0) * 100%), calc(var(--y, 0) * 100%));
-  transition: transform var(--t, 0ms) linear;
   pointer-events: none;
 }
-.ice-face {
-  width: 86%;
-  height: 86%;
+.grid-npc span, .grid-face {
+  width: 84%;
+  height: 84%;
   border-radius: 50%;
   display: grid;
   place-items: center;
-  background: radial-gradient(circle at 32% 28%, rgba(255, 255, 255, .6), transparent 55%), #d8b07a;
+  font-size: calc(var(--cell) * .5);
+  line-height: 1;
+  background: radial-gradient(circle at 32% 28%, rgba(255, 255, 255, .65), transparent 55%), var(--c, #ccc);
   box-shadow: 0 3px 8px rgba(0, 0, 0, .3);
 }
-.ice-face.bump { animation: shake .3s; }
-.ice-board.cleared .ice-face { box-shadow: 0 0 0 4px #fff3b0, 0 0 18px 8px rgba(255, 230, 120, .9); }
-.ice-controls { display: flex; flex-direction: column; align-items: center; gap: 12px; cursor: auto; }
-.ice-pad { display: grid; grid-template-columns: repeat(3, 58px); grid-template-rows: repeat(3, 58px); gap: 6px; }
-.ice-btn {
+.grid-npc span { animation: bob 3.2s ease-in-out infinite; }
+.grid-npc:nth-child(2n) span { animation-delay: -1.2s; }
+.grid-npc:nth-child(3n) span { animation-delay: -2.1s; }
+.grid-npc.goal span { box-shadow: 0 0 10px 3px rgba(255, 255, 255, .85); }
+.grid-player { z-index: 2; transition: transform var(--t, 0ms) linear; }
+.grid-face { --c: #d8b07a; }
+.grid-face.bump { animation: shake .3s; }
+.grid-board.cleared .grid-face { box-shadow: 0 0 0 4px #fff3b0, 0 0 18px 8px rgba(255, 230, 120, .9); }
+/* 歩けるマップでは、向いている方に小さな三角を出す */
+.grid-board.walking .grid-player::after {
+  content: "";
+  position: absolute;
+  border: calc(var(--cell) * .12) solid transparent;
+}
+.grid-board.walking .grid-player[data-dir="up"]::after { top: -3%; border-top-width: 0; border-bottom-color: #ff9d2e; }
+.grid-board.walking .grid-player[data-dir="down"]::after { bottom: -3%; border-bottom-width: 0; border-top-color: #ff9d2e; }
+.grid-board.walking .grid-player[data-dir="left"]::after { left: -3%; border-left-width: 0; border-right-color: #ff9d2e; }
+.grid-board.walking .grid-player[data-dir="right"]::after { right: -3%; border-right-width: 0; border-left-color: #ff9d2e; }
+.grid-front { z-index: 1; }
+.grid-front::before {
+  content: "";
+  width: 92%;
+  height: 92%;
+  border: 3px dashed #ff9d2e;
+  border-radius: 24%;
+  animation: blink 1.2s steps(2) infinite;
+}
+
+/* 横の操作パネル（矢印のボタン・集まった仲間） */
+.grid-side { display: flex; flex-direction: column; align-items: center; gap: 12px; cursor: auto; }
+.grid-side:empty { display: none; }
+.grid-controls { display: flex; flex-direction: column; align-items: center; gap: 12px; cursor: auto; }
+.grid-pad { display: grid; grid-template-columns: repeat(3, 58px); grid-template-rows: repeat(3, 58px); gap: 6px; }
+.grid-btn {
   border: 2px solid #eaf8ff;
   border-radius: 14px;
   background: rgba(255, 255, 255, .9);
@@ -633,14 +739,24 @@ button { font: inherit; color: inherit; touch-action: manipulation; }
   cursor: pointer;
   box-shadow: 0 4px 12px rgba(0, 0, 0, .25);
 }
-.ice-btn:active { transform: scale(.94); background: #dff3ff; }
-.ice-btn.up { grid-column: 2; grid-row: 1; }
-.ice-btn.left { grid-column: 1; grid-row: 2; }
-.ice-btn.right { grid-column: 3; grid-row: 2; }
-.ice-btn.down { grid-column: 2; grid-row: 3; }
-.ice-reset { min-height: 42px; padding: 8px 18px; font-size: 15px; border-color: #eaf8ff; background: rgba(255, 255, 255, .9); color: #2b5f86; }
-.ice-reset:hover { background: #fff; }
-.ice-skip .btn.ghost {
+.grid-btn:active { transform: scale(.94); background: #dff3ff; }
+.grid-btn.up { grid-column: 2; grid-row: 1; }
+.grid-btn.left { grid-column: 1; grid-row: 2; }
+.grid-btn.right { grid-column: 3; grid-row: 2; }
+.grid-btn.down { grid-column: 2; grid-row: 3; }
+.grid-btn.look {
+  grid-column: 2;
+  grid-row: 2;
+  padding: 0;
+  font-size: 12px;
+  white-space: nowrap;
+  color: #7a4a00;
+  background: #ffe2a8;
+  border-color: #ffd27a;
+}
+.grid-reset { min-height: 42px; padding: 8px 18px; font-size: 15px; border-color: #eaf8ff; background: rgba(255, 255, 255, .9); color: #2b5f86; }
+.grid-reset:hover { background: #fff; }
+.grid-skip .btn.ghost {
   min-height: 36px;
   padding: 6px 14px;
   border-radius: 999px;
@@ -649,13 +765,37 @@ button { font: inherit; color: inherit; touch-action: manipulation; }
   font-size: 14px;
   text-decoration: none;
 }
+.grid-team {
+  width: 186px;
+  padding: 6px 8px 8px;
+  border-radius: 12px;
+  background: rgba(255, 250, 240, .92);
+  color: var(--ink);
+  text-align: center;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, .2);
+}
+.grid-team-title { font-size: 12px; font-weight: 700; color: #8a6a30; }
+.grid-team-list { display: flex; flex-wrap: wrap; justify-content: center; gap: 4px; margin-top: 4px; min-height: 30px; }
+.grid-team-face {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: 17px;
+  line-height: 1;
+  background: radial-gradient(circle at 32% 28%, rgba(255, 255, 255, .6), transparent 55%), var(--c);
+}
+.grid-team-none { align-self: center; font-size: 12px; color: var(--ink-soft); }
+
 /* 縦長の画面（スマホ）では、ボタンを盤面の下に出す */
 @media (max-width: 640px) {
-  .ice-wrap { flex-direction: column; gap: 8px; }
-  .ice-board { width: min(92cqw, calc((100cqh - 220px) * var(--w) / var(--h))); }
-  .ice-pad { grid-template-columns: repeat(3, 50px); grid-template-rows: repeat(3, 44px); gap: 4px; }
-  .ice-controls { flex-direction: row; flex-wrap: wrap; justify-content: center; gap: 8px 12px; }
-  .ice-skip:empty { display: none; }
+  .grid-wrap { flex-direction: column; gap: 8px; }
+  .grid-board { width: min(94cqw, calc((100cqh - 220px) * var(--bw) / var(--bh))); }
+  .grid-pad { grid-template-columns: repeat(3, 50px); grid-template-rows: repeat(3, 44px); gap: 4px; }
+  .grid-side, .grid-controls { flex-direction: row; flex-wrap: wrap; justify-content: center; gap: 8px 12px; }
+  .grid-team { width: auto; max-width: 92cqw; }
+  .grid-skip:empty { display: none; }
 }
 
 /* ---------------- 最後の謎の枠（data.js の PUZZLE） ---------------- */
@@ -1109,6 +1249,8 @@ button { font: inherit; color: inherit; touch-action: manipulation; }
 .debug-note { margin: 0; color: #666; font-size: 13px; }
 .debug-input { flex: 1; min-width: 180px; font: inherit; font-size: 16px; padding: 8px 10px; border-radius: 8px; border: 1px solid #bbb; }
 .debug-out { font-size: 14px; user-select: all; -webkit-user-select: all; }
+.debug-local { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; width: 100%; }
+.debug-local span { min-width: 15em; font-size: 13px; }
 .debug-error { color: #a1122b; }
 .debug-warn { color: #8a5a00; }
 
