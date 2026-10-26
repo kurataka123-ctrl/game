@@ -5,6 +5,7 @@
      ・会話、選択肢、合言葉、カード、画面の文字を変える → data.js
      ・夢の部屋の地図を変える                         → room.js
      ・第1部で歩く地図（家の部屋の形）を変える → house.js
+     ・1-3 の戦いの技・数値・セリフを変える      → data.js（BATTLES・MOVES）
    ※ このファイルには文章を書きません。画面に出る文章は data.js にまとめます。
    ================================================================ */
 (() => {
@@ -27,6 +28,8 @@
   const PZ = tryGet(() => PUZZLE);
   const RM = tryGet(() => ROOM);
   const HS = tryGet(() => HOUSE);
+  const BT = tryGet(() => BATTLES) || {};
+  const MV = tryGet(() => MOVES) || {};
 
   if (!S || !CHARS || !SCN) {
     showLoadError();
@@ -110,9 +113,13 @@
     return state.flags.includes(name) || S[name] === true;
   }
   function visible(item) {
+    return visibleWith(item, flagOn);
+  }
+  // on：条件の名前が入っているかを調べる関数（戦いの点検で、仲間がいる・いないを両方調べるため）
+  function visibleWith(item, on) {
     if (!item || typeof item !== "object") return true;
-    if (item.if != null && !toArray(item.if).every(flagOn)) return false;
-    if (item.unless != null && toArray(item.unless).some(flagOn)) return false;
+    if (item.if != null && !toArray(item.if).every(on)) return false;
+    if (item.unless != null && toArray(item.unless).some(on)) return false;
     return true;
   }
 
@@ -192,6 +199,58 @@
       if (who && who !== "hero" && !CHARS[who].voice && !ids.includes(who)) ids.push(who);
     }
     return ids.slice(0, 3);
+  }
+
+  // PCだけで使うイラスト（data.js の SETTINGS.pcArt のフォルダの画像）
+  //   PCで index.html を直接開いたとき（file://）だけ使う。公開したページ（iPhone）では読みこまない。
+  //   メッセージ画面（chat）でも使わない。探すのは、CHARACTERS に art（画像の名前）を書いたキャラクターだけ
+  //   画像が見つからなければ、絵文字のまま
+  const ART_DIR = location.protocol === "file:" && S.pcArt ? encodeURI(String(S.pcArt).replace(/[\\/]+$/, "")) : "";
+  const ART_TYPES = ["png", "webp", "jpg", "jpeg"];
+  const artLook = {};                          // キャラクターID → 探した結果（見つかれば画像の場所、なければ ""）
+  const artCount = { hit: 0, miss: 0, type: "" };  // 見つかった数・見つからなかった数・見つかった画像の種類
+  let artQueue = Promise.resolve();            // 画像は1人ずつ順番に探す
+  function findArt(id) {
+    if (!artLook[id]) {
+      // 1枚も見つからないまま2人分見つからなければ、フォルダがないと考えて、もう探さない
+      // （見つからない画像は、開発者ツールの Console にエラーとして出るため、増やさない）
+      artLook[id] = artQueue = artQueue.then(() => (!artCount.hit && artCount.miss >= 2 ? "" : probeArt(id)));
+    }
+    return artLook[id];
+  }
+  function probeArt(id) {
+    const name = encodeURIComponent(String(CHARS[id].art));
+    // 前に見つかった画像の種類（png など）から先にためす
+    const types = artCount.type ? [artCount.type, ...ART_TYPES.filter((t) => t !== artCount.type)] : ART_TYPES;
+    return new Promise((resolve) => {
+      const img = new Image();
+      let i = 0;
+      img.onload = () => {
+        artCount.hit += 1;
+        artCount.type = artCount.type || types[i];
+        resolve(img.src);
+      };
+      img.onerror = () => {
+        i += 1;
+        if (i < types.length) {
+          img.src = `${ART_DIR}/${name}.${types[i]}`;
+        } else {
+          artCount.miss += 1;
+          resolve("");
+        }
+      };
+      img.src = `${ART_DIR}/${name}.${types[0]}`;
+    });
+  }
+  function withArt(node, id) {
+    const c = CHARS[id];
+    if (!ART_DIR || !c || !c.art || c.voice || currentView === "chat") return node;
+    findArt(id).then((src) => {
+      if (!src) return;
+      node.replaceChildren(el("img", { class: "art", src, alt: "", draggable: "false" }));
+      node.classList.add("has-art");
+    });
+    return node;
   }
 
   // ==============================================================
@@ -291,15 +350,16 @@
     const roomBox = el("div", { class: "room-wrap", hidden: true });
     const gridBox = el("div", { class: "grid-box", hidden: true });   // 氷の床・歩けるマップ
     const puzzleBox = el("div", { class: "puzzle-box", hidden: true });
+    const battleBox = el("div", { class: "battle-box", hidden: true }); // 戦い
     const layer = el("div", { class: "stage-layer" });
     const draft = el("div", { class: "draft-badge", text: T("draft"), hidden: true });
-    const stage = el("div", { class: "stage" }, chars, roomBox, gridBox, puzzleBox, layer, draft);
+    const stage = el("div", { class: "stage" }, chars, roomBox, gridBox, puzzleBox, battleBox, layer, draft);
     const name = el("div", { class: "nameplate", hidden: true });
     const text = el("div", { class: "text" });
     const mark = el("div", { class: "next-mark", text: "▼", hidden: true, "aria-hidden": "true" });
     const box = el("div", { class: "textbox", tabindex: "0" }, name, text, mark);
     const root = el("section", { class: "screen novel" }, topbar, stage, box);
-    return { root, chapter, partyBtn, chars, roomBox, gridBox, puzzleBox, layer, draft, stage, name, text, mark, box };
+    return { root, chapter, partyBtn, chars, roomBox, gridBox, puzzleBox, battleBox, layer, draft, stage, name, text, mark, box };
   }
 
   // 文字を1文字ずつ表示する
@@ -329,7 +389,8 @@
     return { skip: finish, cancel() { finished = true; clearInterval(timer); } };
   }
 
-  const NV = { lines: [], idx: 0, then: null, hold: true, typer: null, mode: "idle", shown: [] };
+  // auto：話し手のいない行を、自動で次へ進めるまでの時間（戦いの文）。onLine：行を出すたびに呼ぶ
+  const NV = { lines: [], idx: 0, then: null, hold: true, typer: null, mode: "idle", shown: [], auto: 0, onLine: null, autoTimer: null };
 
   // 選択肢・入力欄などを表示する（null で消す）
   // 表示中はキャラクターを上によせて、重ならないようにする
@@ -344,7 +405,7 @@
   function charNode(id, i) {
     const c = CHARS[id];
     return el("div", { class: "char", "data-id": id, style: `--c:${c.color || "#999"};--i:${i}` },
-      el("div", { class: "char-face", text: c.emoji || "？" }),
+      withArt(el("div", { class: "char-face", text: c.emoji || "？" }), id),
       el("div", { class: "char-name", text: charName(c) }));
   }
 
@@ -355,8 +416,8 @@
     novel.chars.replaceChildren(...NV.shown.map(charNode));
   }
 
-  // 地図・氷の床・歩けるマップ・最後の謎の枠を表示しているか（そのときはキャラクターを出さない）
-  const stageBusy = () => !novel.roomBox.hidden || !novel.gridBox.hidden || !novel.puzzleBox.hidden;
+  // 地図・氷の床・歩けるマップ・最後の謎の枠・戦いを表示しているか（そのときはキャラクターを出さない）
+  const stageBusy = () => !novel.roomBox.hidden || !novel.gridBox.hidden || !novel.puzzleBox.hidden || !novel.battleBox.hidden;
 
   function setSpeaker(who) {
     const c = who ? CHARS[who] : null;
@@ -382,8 +443,11 @@
     const ln = NV.lines[i];
     const last = i === NV.lines.length - 1;
     const token = gen;
+    const lines = NV.lines;
     let doneNow = false;
+    clearTimeout(NV.autoTimer);
     setSpeaker(ln.who);
+    if (NV.onLine) NV.onLine(i);
     novel.mark.hidden = true;
     if (NV.typer) NV.typer.cancel();
     const handle = typeInto(novel.text, ln.text, () => {
@@ -391,12 +455,21 @@
       NV.typer = null;
       if (token !== gen) return;
       if (last && !NV.hold) finishSay();
-      else novel.mark.hidden = false;
+      else {
+        novel.mark.hidden = false;
+        // 戦いの文（話し手のいない行）は、少し待つと自動で次へ進む
+        if (NV.auto && !ln.who) {
+          NV.autoTimer = setTimeout(() => {
+            if (token === gen && NV.lines === lines && NV.idx === i && NV.mode === "talk") nvAdvance();
+          }, NV.auto);
+        }
+      }
     });
     if (!doneNow) NV.typer = handle;
   }
 
   function finishSay() {
+    clearTimeout(NV.autoTimer);
     NV.mode = "idle";
     novel.mark.hidden = true;
     const then = NV.then;
@@ -426,15 +499,28 @@
       NV.mode = "idle";
       NV.dark = sc.room === "dark";
       NV.grid = null;
+      NV.battle = null;
       GRID.key = null;
       novel.gridBox.hidden = true;
       novel.gridBox.replaceChildren();
       novel.puzzleBox.hidden = true;
       novel.puzzleBox.replaceChildren();
+      novel.battleBox.hidden = true;
+      novel.battleBox.replaceChildren();
       const prevCrowd = NV.crowd || "";
       NV.crowd = "";
       novel.chars.classList.remove("crowd", "settled");
-      if (sc.ice || sc.walk) {
+      if (sc.battle) {
+        // 戦い（data.js の BATTLES）
+        novel.chars.replaceChildren();
+        NV.shown = [];
+        novel.roomBox.hidden = true;
+        novel.roomBox.replaceChildren();
+        novel.battleBox.hidden = false;
+        const b = battleOf(sc.battle);
+        if (b) NV.battle = renderBattle(novel.battleBox, b);
+        else novel.battleBox.replaceChildren(el("div", { class: "room-missing", text: `data.js の BATTLES に「${sc.battle}」がありません。` }));
+      } else if (sc.ice || sc.walk) {
         // 氷の床のパズル・歩けるマップ（house.js の地図）
         novel.chars.replaceChildren();
         NV.shown = [];
@@ -473,10 +559,14 @@
 
     // lines を順に表示し、終わったら then を呼ぶ
     // hold が true なら、最後の行のあとにもう一度クリックを待つ
-    say(lines, then, hold = true) {
+    // opts.auto：話し手のいない行を、自動で次へ進めるまでの時間 / opts.onLine(i)：i 行目を出すときに呼ぶ
+    say(lines, then, hold = true, opts) {
+      clearTimeout(NV.autoTimer);
       NV.lines = toArray(lines).filter(visible).map(parseLine);
       NV.then = then;
       NV.hold = hold;
+      NV.auto = (opts && opts.auto) || 0;
+      NV.onLine = (opts && opts.onLine) || null;
       setLayer(null);
       if (!NV.lines.length) {
         NV.mode = "idle";
@@ -535,7 +625,7 @@
       openOverlay(el("div", { class: "panel word-panel", style: `--c:${c.color || "#ccc"}` },
         el("div", { class: "word-get", text: T("wordGet") }),
         el("div", { class: "word-from" },
-          el("span", { class: "word-avatar", text: c.emoji || "？", "aria-hidden": "true" }),
+          withArt(el("span", { class: "word-avatar", text: c.emoji || "？", "aria-hidden": "true" }), id),
           T("wordFrom", { who: charName(c) })),
         wordNode(c.word, "big"),
         el("p", { class: "panel-note", text: T("wordNote") }),
@@ -724,7 +814,7 @@
           el("div", { class: "grid-team-title", text: T("walkTeam") }),
           el("div", { class: "grid-team-list" },
             ids.length
-              ? ids.map((id) => el("span", { class: "grid-team-face", style: `--c:${CHARS[id].color || "#ccc"}`, title: charName(CHARS[id]), text: CHARS[id].emoji || "？" }))
+              ? ids.map((id) => withArt(el("span", { class: "grid-team-face", style: `--c:${CHARS[id].color || "#ccc"}`, title: charName(CHARS[id]), text: CHARS[id].emoji || "？" }), id))
               : el("span", { class: "grid-team-none", text: T("walkTeamNone") })));
       };
 
@@ -851,6 +941,107 @@
       };
       save();
       resume();
+    },
+
+    // 戦い：コマンドを選ぶ → 1ターン分の出来事を順に見せる → 勝つまでくり返す
+    //   負けたら、ヒント（lose）を出して、その戦いの最初からやり直す
+    battle(sc, onWin) {
+      const b = battleOf(sc.battle);
+      const ui = NV.battle;
+      if (!b || !ui) return;
+      const token = gen;
+      const def = b.def;
+      let st = battleStart(b);
+      let losses = 0;
+      const play = (steps, then) => {
+        NovelView.say(steps.map((s) => s.text), then, true, {
+          auto: Math.max(0, Number(S.battleAuto) || 0),
+          onLine: (i) => { if (token === gen) ui.show(steps[i]); },
+        });
+      };
+      // コマンドを選ぶ（数字のキーと矢印キーでも選べる）
+      const menu = () => {
+        if (token !== gen) return;
+        NV.mode = "battle";
+        setSpeaker(null);
+        novel.mark.hidden = true;
+        novel.text.textContent = T("battleAsk", { who: whoName(b.leader) });
+        ui.show({ st });
+        const skip = def.skip && def.skip.next && losses >= (def.skip.after == null ? 2 : def.skip.after) ? def.skip : null;
+        const pick = (id) => {
+          GRID.key = null;
+          ui.menu.replaceChildren();
+          turn(id);
+        };
+        const buttons = b.commands.filter((id) => MV[id]).map((id, i) => el("button", {
+          type: "button", class: "bt-cmd",
+          onmousedown: (e) => e.preventDefault(),
+          onclick: (e) => { e.stopPropagation(); pick(id); },
+        },
+          el("span", { class: "bt-cmd-key", text: String(i + 1), "aria-hidden": "true" }),
+          el("span", { class: "bt-cmd-name", text: fill(MV[id].name || id) }),
+          MV[id].note ? el("span", { class: "bt-cmd-note", text: fill(MV[id].note) }) : null));
+        ui.menu.replaceChildren(el("div", { class: "bt-cmds" }, buttons));
+        if (skip) {
+          ui.menu.append(el("button", {
+            type: "button", class: "btn ghost bt-skip", text: fill(skip.text || T("battleSkip")),
+            onclick: (e) => {
+              e.stopPropagation();
+              GRID.key = null;
+              ui.menu.replaceChildren();
+              NovelView.say(toArray(skip.reply), () => runScene(skip.next), true);
+            },
+          }));
+        }
+        GRID.key = (e) => {
+          const n = Number(e.key);
+          if (n >= 1 && n <= buttons.length) {
+            if (!e.repeat) buttons[n - 1].click();
+            return true;
+          }
+          const dir = KEY_DIRS[e.key];
+          if (!dir) return false;
+          const at = buttons.indexOf(document.activeElement);
+          const step = dir === "up" || dir === "left" ? -1 : 1;
+          const next = at < 0 ? 0 : (at + step + buttons.length) % buttons.length;
+          if (buttons[next]) buttons[next].focus({ preventScroll: true });
+          return true;
+        };
+      };
+      // ターンの始め：ヒントがあれば、ニンフィアが話してから、コマンドを選ぶ
+      const ask = () => {
+        if (token !== gen) return;
+        ui.show({ st });
+        const hint = battleHintAt(b, st.turn);
+        if (hint.length) NovelView.say(hint, menu, true);
+        else menu();
+      };
+      const turn = (id) => {
+        NV.mode = "talk";
+        const r = battleTurn(b, st, id);
+        play(r.steps, () => {
+          if (token !== gen) return;
+          st = r.state;
+          if (st.won) {
+            onWin();
+            return;
+          }
+          if (st.lost) {
+            losses += 1;
+            const lose = toArray(def.lose);
+            const hint = lose.length ? toArray(lose[Math.min(losses, lose.length) - 1]) : [];
+            NovelView.say([...hint, T("battleRetry", { n: b.hearts })], () => {
+              if (token !== gen) return;
+              st = Object.assign(battleStart(b), { hitSaid: st.hitSaid });
+              ui.show({ st, fx: "retry" });
+              ask();
+            }, true);
+            return;
+          }
+          ask();
+        });
+      };
+      ask();
     },
 
     proceed(cb) { cb(); },
@@ -1072,7 +1263,7 @@
     }
     const npcs = el("div", { class: "grid-npcs" });
     const front = el("div", { class: "grid-front", hidden: true });
-    const face = el("span", { class: "grid-face", text: (CHARS.eevee && CHARS.eevee.emoji) || "●" });
+    const face = withArt(el("span", { class: "grid-face", text: (CHARS.eevee && CHARS.eevee.emoji) || "●" }), "eevee");
     const player = el("div", { class: "grid-player", "aria-hidden": "true" }, face);
     board.append(npcs, front, player);
     const side = el("div", { class: "grid-side" });
@@ -1092,7 +1283,7 @@
       npcs.replaceChildren(...list.map((n) => {
         const c = CHARS[n.id] || {};
         const node = el("div", { class: "grid-npc" + (n.goal ? " goal" : ""), style: `--c:${c.color || "#ccc"}` },
-          el("span", { text: c.emoji || "？" }));
+          withArt(el("span", { text: c.emoji || "？" }), n.id));
         at(node, n.x, n.y);
         return node;
       }));
@@ -1210,6 +1401,301 @@
     container.replaceChildren(el("div", { class: "puzzle-wrap" },
       grid,
       PZ.note ? el("p", { class: "puzzle-note", text: fill(PZ.note) }) : null));
+  }
+
+  // ==============================================================
+  // 戦い（data.js の BATTLES・MOVES。1-3 ニンフィアの花畑）
+  //   1ターン分の出来事を先に計算してから（battleTurn）、画面で1つずつ見せる
+  //   数値は固定で、乱数は使わない（同じ選び方なら、いつも同じ結果になる）
+  // ==============================================================
+  // 主人公は、入力した名前で表示する
+  const whoName = (id) => (id === "hero" ? fill("{name}") : charName(CHARS[id]));
+
+  // 戦いの文の { } を置きかえる（{who} 技を使った人・{move} 技の名前・{n} 数など。{name} なども）
+  function btText(s, vars) {
+    return fill(String(s == null ? "" : s).replace(/\{(\w+)\}/g, (whole, k) => (vars && k in vars ? String(vars[k]) : whole)));
+  }
+  // 文の一覧を、条件（if・unless）で選んでから置きかえる
+  function btLines(lines, vars) {
+    return toArray(lines).filter(visible).map((ln) => {
+      if (ln && typeof ln === "object") return ln.who ? { who: ln.who, text: btText(ln.text, vars) } : btText(ln.text, vars);
+      return btText(ln, vars);
+    });
+  }
+
+  // 戦いのデータを、動く順番の一覧（members）にまとめる
+  //   on：条件の名前が入っているかを調べる関数（点検では、仲間がいる・いないの両方を調べる）
+  function battleOf(id, on = flagOn) {
+    const def = BT[id];
+    if (!def || typeof def !== "object") return null;
+    const list = toArray(def.party)
+      .map((p) => (typeof p === "string" ? { who: p } : p))
+      .filter((p) => p && p.who && visibleWith(p, on));
+    // leader を party に書かなかったときは、いちばん先に動く
+    if (def.leader && !list.some((p) => p.who === def.leader)) list.unshift({ who: def.leader });
+    const members = list.map((p) => ({
+      who: p.who,
+      leader: p.who === def.leader,
+      tactics: p.who === def.leader ? []
+        : toArray(p.tactics).map((t) => (typeof t === "string" ? { move: t } : t)).filter((t) => t && t.move),
+    }));
+    const e = def.enemy || {};
+    return {
+      id, def, members,
+      leader: def.leader,
+      commands: toArray(def.commands),
+      hearts: Math.max(0, Number(def.hearts) || 0),
+      foes: toArray(e.who).filter((w) => CHARS[w]),
+      enemy: e,
+      max: Math.max(1, Number(e.max) || 1),
+      weak: toArray(e.weak),
+      damage: Math.max(0, Number(e.damage) || 0),
+      blizzard: Math.max(0, Number(e.blizzard) || 0),
+    };
+  }
+
+  // 戦いの始め（ハートもゲージも満タン）
+  //   hitSaid：hitSay（ゲージが減ったときのセリフ）を出したか。やり直しても、2回目からは出さない
+  function battleStart(b) {
+    return { turn: 1, hearts: b.hearts, gauge: b.max, cheer: 0, cheerLeft: 0, won: false, lost: false, hitSaid: false };
+  }
+
+  // さくせん：上から順に調べて、条件に合った最初の技（合うものがなければ、動かない）
+  //   hearts: 2 → ハートが2以下のとき / cheer: false → 力アップが切れているとき（true は、力アップ中）
+  function pickTactic(m, st) {
+    for (const t of m.tactics) {
+      if (t.hearts != null && !(st.hearts <= Number(t.hearts))) continue;
+      if (t.cheer === false && st.cheerLeft > 0) continue;
+      if (t.cheer === true && !(st.cheerLeft > 0)) continue;
+      if (MV[t.move]) return t.move;
+    }
+    return null;
+  }
+
+  // 1ターン分の出来事を計算する（画面には出さない）
+  //   cmd：操作するキャラが選んだ技の名前
+  //   返り値：{ state：ターンのあとの状態, steps：画面に出す文と、そのときの状態（st）・動き（fx）の一覧 }
+  function battleTurn(b, st0, cmd) {
+    const st = Object.assign({}, st0);
+    const e = b.enemy;
+    const steps = [];
+    const snap = () => ({ turn: st.turn, hearts: st.hearts, gauge: st.gauge, cheerLeft: st.cheerLeft });
+    const vars = (extra) => Object.assign({ enemy: b.foes.length ? whoName(b.foes[0]) : "", gauge: fill(e.gauge || "") }, extra);
+    const narration = (t) => typeof t === "string" && !parseLine(t).who;
+    // 1つの動きの文を steps に入れる。最初の2つがどちらも地の文なら、1つの枠に2行で出す
+    const act = (parts) => {
+      const list = parts.filter((p) => p && p.text);
+      for (let i = 0; i < list.length; i++) {
+        const p = Object.assign({}, list[i]);
+        const q = list[i + 1];
+        if (i === 0 && q && narration(p.text) && narration(q.text)) {
+          p.text = `${p.text}\n${q.text}`;
+          p.st = q.st;
+          p.fx = q.fx || p.fx;
+          p.target = q.target || p.target;
+          i += 1;
+        }
+        steps.push(p);
+      }
+    };
+
+    // 仲間の番（leader → party の上から順）
+    let boost = 0;   // てだすけの倍率（次に動く仲間に効く）
+    for (let i = 0; i < b.members.length && !st.won; i++) {
+      const m = b.members[i];
+      const id = m.leader ? cmd : pickTactic(m, st);
+      const mv = id ? MV[id] : null;
+      if (!mv) continue;
+      const times = boost || 1;
+      boost = 0;
+      const v = vars({ who: whoName(m.who), move: fill(mv.name || id) });
+      const power = Math.max(0, Number(mv.power) || 0);
+      const parts = [{ text: mv.text ? btText(mv.text, v) : T("battleUse", v), st: snap(), actor: m.who, fx: mv.ribbon ? "ribbon" : "" }];
+      if (times > 1) parts.push({ text: T("battleBoost", { n: times }), st: snap(), actor: m.who });
+      for (const ln of btLines(mv.say, v)) parts.push({ text: ln, st: snap(), actor: m.who });
+      if (mv.kind === "help") {
+        const next = b.members.slice(i + 1).find((x) => !x.leader && x.tactics.length);
+        if (next) {
+          boost = Math.max(2, power);
+          parts.push({ text: T("battleHelp", { target: whoName(next.who), n: boost }), st: snap(), actor: m.who, target: next.who, fx: "help" });
+        } else {
+          parts.push({ text: T("battleHelpNone"), st: snap(), actor: m.who });
+        }
+      } else if (mv.kind === "cheer") {
+        st.cheer = power * times;
+        st.cheerLeft = Math.max(1, Number(mv.turns) || 1);
+        parts.push({ text: T("battleCheer", { n: st.cheerLeft }), st: snap(), actor: m.who, fx: "cheer" });
+      } else if (mv.kind === "heal") {
+        const n = Math.min(b.hearts - st.hearts, power * times);
+        if (n > 0) {
+          st.hearts += n;
+          parts.push({ text: T("battleHeal", { n }), st: snap(), actor: m.who, fx: "heal" });
+        } else {
+          parts.push({ text: T("battleHealFull"), st: snap(), actor: m.who });
+        }
+      } else if (mv.kind === "attack" && b.weak.includes(mv.type)) {
+        st.gauge = Math.max(0, st.gauge - (power + st.cheer) * times);
+        if (st.gauge <= 0) {
+          st.won = true;
+          const lines = btLines(e.break, v);
+          (lines.length ? lines : [T("battleBreak", v)]).forEach((ln, k) => parts.push({ text: ln, st: snap(), actor: k ? "" : m.who, fx: k ? "" : "break" }));
+        } else {
+          parts.push({ text: e.hit ? btText(e.hit, v) : T("battleHit", v), st: snap(), actor: m.who, fx: "hit" });
+          if (!st.hitSaid) {
+            st.hitSaid = true;
+            for (const ln of btLines(e.hitSay, v)) parts.push({ text: ln, st: snap() });
+          }
+        }
+      } else if (mv.kind === "attack") {
+        // 効かない技：理由が分かる文を出す（技の bounce か、雪だるまの bounce）
+        const lines = btLines(mv.bounce != null ? mv.bounce : e.bounce, v);
+        (lines.length ? lines : [T("battleBounce")]).forEach((ln, k) => parts.push({ text: ln, st: snap(), actor: k ? "" : m.who, fx: k ? "" : "bounce" }));
+      }
+      act(parts);
+    }
+
+    // 雪だるまの番：減らしきれなかったゲージが元にもどる → 攻撃 → ふぶき
+    if (!st.won) {
+      const v = vars({});
+      if (e.regen && st.gauge < b.max) {
+        st.gauge = b.max;
+        act([{ text: e.regenText ? btText(e.regenText, v) : T("battleRegen", v), st: snap(), fx: "regen" }]);
+      }
+      const hurt = (text, n) => {
+        if (!b.hearts || !(n > 0) || st.lost) return;
+        st.hearts = Math.max(0, st.hearts - n);
+        act([{ text, st: snap() }, { text: T("battleDamage", { n }), st: snap(), fx: "damage" }]);
+        if (st.hearts <= 0) st.lost = true;
+      };
+      hurt(e.attackText ? btText(e.attackText, v) : T("battleAttack", v), b.damage);
+      if (b.blizzard && st.turn % b.blizzard === 0) hurt(e.blizzardText ? btText(e.blizzardText, v) : T("battleBlizzard"), 1);
+      if (st.lost) {
+        act([{ text: T("battleLose"), st: snap(), fx: "lose" }]);
+      } else if (st.cheerLeft > 0) {
+        st.cheerLeft -= 1;
+        if (!st.cheerLeft) {
+          st.cheer = 0;
+          act([{ text: T("battleCheerEnd"), st: snap() }]);
+        }
+      }
+      st.turn += 1;
+    }
+    return { state: st, steps };
+  }
+
+  // turn ターン目の始めに出すヒント（最後のヒントは、そのあとも2ターンごとにくり返す）
+  function battleHintAt(b, turn) {
+    const list = toArray(b.def.hints).filter((h) => h && Number(h.turn) > 0).sort((x, y) => x.turn - y.turn);
+    if (!list.length) return [];
+    const last = list[list.length - 1];
+    const h = list.find((x) => Number(x.turn) === turn)
+      || (turn > last.turn && (turn - last.turn) % 2 === 0 ? last : null);
+    return h ? btLines(h.say, {}) : [];
+  }
+
+  // 戦いの点検：コマンドの選び方を全部ためして、何ターンで勝てるか・負けるかを調べる
+  //   返り値：{ win：最短で勝てるターン数（勝てなければ 0）, path：そのときのコマンド,
+  //            lose：最短で負けるターン数（負けることがなければ 0） }
+  function battleCheck(id, on, limit = 30) {
+    const out = { win: 0, path: [], lose: 0 };
+    const b = battleOf(id, on);
+    if (!b) return out;
+    const cmds = b.commands.filter((c) => MV[c]);
+    if (!cmds.length) return out;
+    const key = (s) => [s.hearts, s.gauge, s.cheer, s.cheerLeft, b.blizzard ? s.turn % b.blizzard : 0].join(",");
+    let layer = [{ st: battleStart(b), path: [] }];
+    const seen = new Set([key(layer[0].st)]);
+    for (let n = 1; n <= limit && layer.length && !(out.win && out.lose); n++) {
+      const next = [];
+      for (const node of layer) {
+        for (const c of cmds) {
+          const r = battleTurn(b, node.st, c);
+          if (r.state.won) {
+            if (!out.win) { out.win = n; out.path = [...node.path, c]; }
+            continue;
+          }
+          if (r.state.lost) {
+            if (!out.lose) out.lose = n;
+            continue;
+          }
+          const k = key(r.state);
+          if (seen.has(k)) continue;
+          seen.add(k);
+          next.push({ st: r.state, path: [...node.path, c] });
+        }
+      }
+      layer = next;
+    }
+    return out;
+  }
+
+  // 戦いの画面を描く（雪だるま・ゲージ・ハート・仲間・コマンドの場所）
+  //   show(step)：step.st（ハート・ゲージなど）を画面に映し、step.fx の動きをつける
+  function renderBattle(container, b) {
+    const e = b.enemy;
+    const face = (id) => withArt(el("div", { class: "bt-face", text: (CHARS[id] && CHARS[id].emoji) || "？" }), id);
+    const color = (id) => (CHARS[id] && CHARS[id].color) || "#ccc";
+    const turnNode = el("span", { class: "bt-turn" });
+    const storm = el("span", { class: "bt-storm" });
+    const info = el("div", { class: "bt-info" }, el("span", { class: "bt-title", text: fill(b.def.title || "") }), turnNode, storm);
+    const foes = b.foes.map((id) => el("div", { class: "bt-foe", style: `--c:${color(id)}` },
+      face(id), el("div", { class: "bt-name", text: whoName(id) })));
+    const pips = Array.from({ length: b.max }, () => el("span", { class: "bt-pip", text: e.icon || "◆" }));
+    const gauge = e.gauge ? el("div", { class: "bt-gauge" }, el("span", { class: "bt-gauge-name", text: fill(e.gauge) }), pips) : null;
+    const foeBox = el("div", { class: "bt-foes" }, el("div", { class: "bt-foe-row" }, foes), gauge);
+    const hearts = Array.from({ length: b.hearts }, () => el("span", { class: "bt-heart", text: "♥" }));
+    const buff = el("span", { class: "bt-buff", hidden: true });
+    const status = el("div", { class: "bt-status", hidden: !b.hearts },
+      el("span", { class: "bt-hearts" }, el("span", { class: "bt-hearts-name", text: T("battleHearts") }), hearts), buff);
+    const members = b.members.map((m) => el("div", {
+      class: "bt-member" + (m.leader ? " leader" : ""), "data-id": m.who, style: `--c:${color(m.who)}`,
+    }, face(m.who), el("div", { class: "bt-name", text: whoName(m.who) })));
+    const row = el("div", { class: "bt-members" + (members.length > 5 ? " many" : "") }, members);
+    const team = el("div", { class: "bt-team" }, status, row);
+    const menu = el("div", { class: "bt-menu", onclick: (ev) => ev.stopPropagation() });
+    const root = el("div", { class: "battle" }, info, foeBox, team, menu);
+    container.replaceChildren(root);
+
+    // 動きをつける（同じ動きが続いても、もう一度動く）。動き終わったら外して、ふだんの動きにもどす
+    const timers = new Map();
+    const flash = (node, cls) => {
+      node.classList.remove(cls);
+      void node.offsetWidth;
+      node.classList.add(cls);
+      clearTimeout(timers.get(node));
+      timers.set(node, setTimeout(() => node.classList.remove(cls), 900));
+    };
+    const show = (step) => {
+      const s = step.st || {};
+      turnNode.textContent = b.hearts ? T("battleTurn", { n: s.turn }) : "";
+      if (b.hearts && b.blizzard) {
+        const at = Math.ceil(s.turn / b.blizzard) * b.blizzard;
+        storm.textContent = at === s.turn ? T("battleStormNow") : T("battleStorm", { n: at });
+      } else {
+        storm.textContent = "";
+      }
+      pips.forEach((p, i) => p.classList.toggle("off", i >= s.gauge));
+      hearts.forEach((h, i) => h.classList.toggle("off", i >= s.hearts));
+      buff.hidden = !(s.cheerLeft > 0);
+      if (s.cheerLeft > 0) buff.textContent = T("battleCheerOn", { n: s.cheerLeft });
+      for (const n of members) {
+        n.classList.toggle("acting", Boolean(step.actor) && n.dataset.id === step.actor);
+        n.classList.toggle("helped", Boolean(step.target) && n.dataset.id === step.target);
+      }
+      const fx = step.fx || "";
+      if (["hit", "bounce", "break", "regen"].includes(fx)) flash(foeBox, "fx-" + fx);
+      if (["damage", "heal", "cheer"].includes(fx)) flash(team, "fx-" + fx);
+      if (fx === "break") foeBox.classList.add("broken");
+      if (fx === "lose") team.classList.add("lost");
+      if (fx === "ribbon") row.classList.add("ribbon");
+      if (fx === "retry") {
+        foeBox.classList.remove("broken");
+        team.classList.remove("lost");
+        row.classList.remove("ribbon");
+      }
+    };
+    show({ st: battleStart(b) });
+    return { root, menu, show };
   }
 
   // ==============================================================
@@ -1422,6 +1908,7 @@
     GRID.key = null;
     closeOverlay();
     if (NV.typer) { NV.typer.cancel(); NV.typer = null; }
+    clearTimeout(NV.autoTimer);
     CV.skip = null;
     // 歩いている途中の場面にもどったとき（会話のあと・つづきから）は、はじめの会話をくり返さない
     const backToWalk = Boolean(walking(sc) && state.walk && state.walk.scene === id);
@@ -1450,6 +1937,11 @@
 
   function afterLines(sc, view) {
     const next = () => giveWord(sc, view, () => leave(sc, view));
+    // 戦い：勝つと、言葉（give）を受けとってから next の場面へ
+    if (sc.battle && view === NovelView) {
+      view.battle(sc, next);
+      return;
+    }
     if (sc.ice && view === NovelView) {
       const skip = sc.ice.skip && sc.ice.skip.next ? sc.ice.skip : null;
       view.ice(sc,
@@ -1591,8 +2083,9 @@
       const c = CHARS[id] || {};
       const met = state.met.includes(id);
       const hasWord = state.words.includes(id) && c.word;
+      const slot = el("div", { class: "party-slot" + (met ? " met" : ""), style: met ? `--c:${c.color || "#ccc"}` : null, text: met ? c.emoji || "" : "" });
       return el("div", { class: "party-cell" + (met ? " met" : "") },
-        el("div", { class: "party-slot" + (met ? " met" : ""), style: met ? `--c:${c.color || "#ccc"}` : null, text: met ? c.emoji || "" : "" }),
+        met ? withArt(slot, id) : slot,
         el("div", { class: "party-info" },
           el("div", { class: "party-name", text: met ? charName(c) : "" }),
           hasWord ? wordNode(c.word, "party-word") : el("span", { class: "party-word none" })));
@@ -1644,6 +2137,7 @@
     gen += 1;
     GRID.key = null;
     if (NV.typer) { NV.typer.cancel(); NV.typer = null; }
+    clearTimeout(NV.autoTimer);
     CV.skip = null;
     closeOverlay();
     const save = storage.load();
@@ -1783,8 +2277,14 @@
     "mapTitle", "mapCaption", "explore", "roomDone", "darkDefault", "darkShine",
     "iceHelp", "iceCount", "iceReset", "iceSkip", "iceBest", "iceClear",
     "walkHelp", "walkHelpTouch", "walkGoal", "walkLook", "walkNothing", "walkThing", "walkTeam", "walkTeamNone",
+    "battleAsk", "battleUse", "battleBoost", "battleBounce", "battleHit", "battleBreak", "battleRegen",
+    "battleHelp", "battleHelpNone", "battleCheer", "battleCheerEnd", "battleHeal", "battleHealFull",
+    "battleAttack", "battleBlizzard", "battleDamage", "battleLose", "battleRetry", "battleTurn",
+    "battleStorm", "battleStormNow", "battleHearts", "battleCheerOn", "battleSkip",
     "endNext", "endMap", "toTitle", "noScene",
   ];
+  // 戦いの文で使える { }（{name} などのほかに）
+  const BATTLE_VARS = ["who", "move", "enemy", "gauge", "target", "n"];
 
   function validate() {
     const errors = [];
@@ -1794,21 +2294,22 @@
       if (target && !ids.has(target)) errors.push(`${where}：「${target}」という場面がありません。`);
     };
     // { } の置きかえ先があるか（{name} 以外は SETTINGS の local か hidden に書く）
-    const checkText = (t, where) => {
+    //   allow：そのほかに使える { }（戦いの文の {who} など）
+    const checkText = (t, where, allow) => {
       String(t == null ? "" : t).replace(/\{(\w+)\}/g, (whole, key) => {
-        if (key !== "name" && !LOCAL[key] && !(S.hidden && S.hidden[key])) {
+        if (key !== "name" && !LOCAL[key] && !(S.hidden && S.hidden[key]) && !toArray(allow).includes(key)) {
           errors.push(`${where}：「{${key}}」に入る文字が、SETTINGS の local にも hidden にもありません。`);
         }
         return whole;
       });
     };
-    const checkLines = (lines, where) => {
+    const checkLines = (lines, where, allow) => {
       toArray(lines).forEach((ln, i) => {
         if (ln && typeof ln === "object" && !ln.who && ln.text == null) {
           errors.push(`${where} の${i + 1}行目に text（文章）がありません。`);
           return;
         }
-        checkText(ln && typeof ln === "object" ? ln.text : ln, where);
+        checkText(ln && typeof ln === "object" ? ln.text : ln, where, allow);
         const p = parseLine(ln);
         if (p.suspect) warnings.push(`${where} の${i + 1}行目：「${p.suspect}」という話し手がいないため、地の文として表示します。`);
       });
@@ -1878,6 +2379,14 @@
         if (sc.mode === "chat") warnings.push(`${at}：メッセージ形式（chat）では、氷の床のパズルを表示できません。`);
       }
       if (sc.walk) checkWalk(id, sc, at, errors, warnings, check, checkLines);
+      if (sc.battle) {
+        if (!BT[sc.battle]) errors.push(`${at} の battle：「${sc.battle}」という戦いが、BATTLES にありません。`);
+        if (!sc.next) errors.push(`${at} の battle には、next（勝ったあとの行き先）が必要です。`);
+        if (sc.choices || sc.input || sc.end || sc.walk || sc.ice || sc.room || sc.puzzle) {
+          errors.push(`${at}：戦いの場面では、choices・input・end・walk・ice・room・puzzle は使えません。`);
+        }
+        if (sc.mode === "chat") warnings.push(`${at}：メッセージ形式（chat）では、戦いを表示できません。`);
+      }
       for (const g of toArray(sc.give)) {
         if (!CHARS[g]) errors.push(`${at} の give：「${g}」というキャラクターがいません。`);
         else if (!CHARS[g].word) errors.push(`${at} の give：「${CHARS[g].name}」に word（言葉）が書かれていません。`);
@@ -1919,6 +2428,7 @@
       }
     }
     for (const key of UI_KEYS) if (TX[key] == null) errors.push(`UI（画面の文字）の「${key}」が見つかりません。`);
+    checkBattles(errors, warnings, check, checkLines);
     if (RM) {
       const cols = RM.cols || 10;
       const rows = RM.rows || 8;
@@ -1960,6 +2470,94 @@
           seen.add(e.id);
         }
       });
+    }
+  }
+
+  // 戦いの仲間の条件（party の if・unless）。仲間がいる・いないで結果が変わるので、両方を調べる
+  function battleConds(def) {
+    const conds = [];
+    for (const p of toArray(def && def.party)) {
+      if (!p || typeof p !== "object") continue;
+      for (const f of [...toArray(p.if), ...toArray(p.unless)]) if (!conds.includes(f)) conds.push(f);
+    }
+    return conds;
+  }
+  const condLabel = (conds) => conds.map((f) => (CHARS[f] ? charName(CHARS[f]) : f)).join("・");
+
+  // 戦いの点検（data.js の BATTLES・MOVES）：書きまちがいと、勝てるかどうか
+  const MOVE_KINDS = ["attack", "help", "cheer", "heal"];
+  function checkBattles(errors, warnings, check, checkLines) {
+    const used = new Set(Object.values(SCN).filter((sc) => sc && sc.battle).map((sc) => sc.battle));
+    for (const [id, def] of Object.entries(BT)) {
+      const at = `BATTLES の「${id}」`;
+      if (!def || typeof def !== "object") {
+        errors.push(`${at} の書き方がおかしいようです。`);
+        continue;
+      }
+      if (!used.has(id)) warnings.push(`${at} は、どの場面でも使われていません（場面の battle）。`);
+      if (!CHARS[def.leader]) errors.push(`${at} の leader：「${def.leader}」というキャラクターがいません。`);
+      const cmds = toArray(def.commands);
+      if (!cmds.length) errors.push(`${at} に commands（操作するキャラのコマンド）がありません。`);
+      for (const c of cmds) if (!MV[c]) errors.push(`${at} の commands：「${c}」という技が、MOVES にありません。`);
+      toArray(def.party).forEach((p, i) => {
+        const m = typeof p === "string" ? { who: p } : p;
+        const where = `${at} の party の${i + 1}番目`;
+        if (!m || !m.who) {
+          errors.push(`${where} に who（仲間）がありません。`);
+          return;
+        }
+        if (!CHARS[m.who]) errors.push(`${where}：「${m.who}」というキャラクターがいません。`);
+        for (const t of toArray(m.tactics)) {
+          const mv = typeof t === "string" ? t : t && t.move;
+          if (!MV[mv]) errors.push(`${where} の tactics：「${mv}」という技が、MOVES にありません。`);
+        }
+      });
+      const e = def.enemy;
+      if (!e || typeof e !== "object") {
+        errors.push(`${at} に enemy（相手）がありません。`);
+        continue;
+      }
+      const foes = toArray(e.who);
+      if (!foes.length) errors.push(`${at} の enemy に who（相手のキャラクター）がありません。`);
+      for (const f of foes) if (!CHARS[f]) errors.push(`${at} の enemy：「${f}」というキャラクターがいません。`);
+      if (!(Number(e.max) >= 1)) errors.push(`${at} の enemy の max（ゲージの大きさ）は、1 以上にしてください。`);
+      if (!toArray(e.weak).length) errors.push(`${at} の enemy に weak（ゲージを減らせる技のタイプ）がありません。`);
+      if (!(Number(def.hearts) > 0) && (Number(e.damage) > 0 || Number(e.blizzard) > 0)) {
+        warnings.push(`${at}：hearts が 0 なので、雪だるまの攻撃とふぶきは起きません。`);
+      }
+      for (const key of ["bounce", "hit", "hitSay", "regenText", "attackText", "blizzardText", "break"]) {
+        checkLines(e[key], `${at} の enemy の ${key}`, BATTLE_VARS);
+      }
+      toArray(def.hints).forEach((h, i) => {
+        if (!h || !(Number(h.turn) > 0)) errors.push(`${at} の hints の${i + 1}番目：turn（何ターン目に出すか）を書いてください。`);
+        else checkLines(h.say, `${at} の hints`, BATTLE_VARS);
+      });
+      toArray(def.lose).forEach((l) => checkLines(l, `${at} の lose`, BATTLE_VARS));
+      if (def.skip) {
+        if (!def.skip.next) errors.push(`${at} の skip に next（行き先）がありません。`);
+        check(def.skip.next, `${at} の skip`);
+        checkLines(def.skip.reply, `${at} の skip の reply`);
+      }
+      // どう選んでも勝てない戦いになっていないか（仲間の条件があれば、いる・いないの両方）
+      const conds = battleConds(def);
+      for (const flag of conds.length ? [false, true] : [false]) {
+        if (battleCheck(id, () => flag).win) continue;
+        const when = conds.length ? `（${condLabel(conds)}が${flag ? "いる" : "いない"}とき）` : "";
+        errors.push(`${at}：この戦いは、どう選んでも勝てません${when}。数値や weak を見直してください。`);
+      }
+    }
+    for (const [id, mv] of Object.entries(MV)) {
+      const at = `MOVES の「${id}」`;
+      if (!mv || typeof mv !== "object") {
+        errors.push(`${at} の書き方がおかしいようです。`);
+        continue;
+      }
+      if (!mv.name) errors.push(`${at} に name（技の名前）がありません。`);
+      if (!MOVE_KINDS.includes(mv.kind)) errors.push(`${at} の kind は、${MOVE_KINDS.join("・")} のどれかにしてください。`);
+      if (mv.kind === "attack" && !mv.type) errors.push(`${at}：攻撃の技（attack）には、type（技のタイプ）を書いてください。`);
+      checkLines(mv.text, `${at} の text`, BATTLE_VARS);
+      checkLines(mv.say, `${at} の say`, BATTLE_VARS);
+      checkLines(mv.bounce, `${at} の bounce`, BATTLE_VARS);
     }
   }
 
@@ -2131,6 +2729,26 @@
     return rows.length ? el("ul", {}, rows) : el("p", { class: "debug-note", text: "（氷の床の場面はありません）" });
   }
 
+  // 戦いの点検（コマンドの選び方を全部ためして、何ターンで勝てるか・負けるかを調べた結果）
+  function battleTool() {
+    const rows = [];
+    for (const [sid, sc] of Object.entries(SCN)) {
+      if (!sc || !sc.battle || !BT[sc.battle]) continue;
+      const conds = battleConds(BT[sc.battle]);
+      for (const flag of conds.length ? [false, true] : [false]) {
+        const r = battleCheck(sc.battle, () => flag);
+        const how = r.path.map((c) => fill((MV[c] && MV[c].name) || c)).join(" → ");
+        const when = conds.length ? `［${condLabel(conds)}が${flag ? "いる" : "いない"}とき］` : "";
+        rows.push(el("li", {
+          class: r.win ? "" : "debug-error",
+          text: `${sid}（${sc.battle}）${when}：${r.win ? `最短${r.win}ターンで勝てる（${how}）` : "勝てない"}`
+            + `／${r.lose ? `最短${r.lose}ターンで負けることがある` : "負けることはない"}`,
+        }));
+      }
+    }
+    return rows.length ? el("ul", {}, rows) : el("p", { class: "debug-note", text: "（戦いの場面はありません）" });
+  }
+
   function setupDebug(problems) {
     const base = location.href.split(/[?#]/)[0];
     const online = /^https?:$/.test(location.protocol);
@@ -2169,6 +2787,8 @@
       keyRows,
       el("h4", { text: "氷の床の最短回数（自動で数えた結果）" }),
       iceTool(),
+      el("h4", { text: "戦いの点検（コマンドの選び方を全部ためした結果）" }),
+      battleTool(),
       el("h4", { text: "data.js の点検結果" }),
       problems.errors.length || problems.warnings.length
         ? el("ul", {},

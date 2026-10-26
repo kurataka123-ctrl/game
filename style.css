@@ -798,6 +798,226 @@ button { font: inherit; color: inherit; touch-action: manipulation; }
   .grid-skip:empty { display: none; }
 }
 
+/* ---------------- 戦い（data.js の BATTLES） ---------------- */
+/*  上から：ターンとふぶき → 雪だるまとゲージ → ハートと仲間 → コマンド */
+.battle-box { position: absolute; inset: 0; container-type: size; }
+.battle {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: clamp(4px, 1.6cqh, 12px);
+  padding: 8px 12px 10px;
+}
+.bt-info {
+  align-self: stretch;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  font-size: 13px;
+}
+.bt-info > span:empty { display: none; }
+.bt-title, .bt-turn, .bt-storm { padding: 2px 12px; border-radius: 999px; white-space: nowrap; }
+.bt-title { background: rgba(0, 0, 0, .5); color: #fff; font-weight: 700; letter-spacing: .04em; }
+.bt-turn { background: rgba(255, 250, 240, .94); color: var(--ink); font-weight: 700; }
+.bt-storm { background: rgba(32, 64, 112, .78); color: #eaf6ff; }
+
+.bt-face {
+  aspect-ratio: 1;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  line-height: 1;
+  background: radial-gradient(circle at 32% 28%, rgba(255, 255, 255, .6), transparent 55%), var(--c);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, .3), inset 0 -6px 12px rgba(0, 0, 0, .12);
+}
+.bt-name {
+  margin-top: 4px;
+  padding: 1px 10px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, .45);
+  color: #fff;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+/* 雪だるまとゲージ */
+.bt-foes { flex: 1; min-height: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; }
+.bt-foe-row { display: flex; gap: clamp(12px, 6cqw, 56px); }
+.bt-foe { display: flex; flex-direction: column; align-items: center; }
+.bt-foe .bt-face {
+  width: clamp(60px, min(18cqw, 26cqh), 140px);
+  font-size: clamp(34px, min(10cqw, 15cqh), 80px);
+  animation: bob 3.2s ease-in-out infinite;
+}
+.bt-foe:nth-child(2) .bt-face { animation-delay: -1.4s; }
+.bt-gauge {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 12px;
+  border-radius: 999px;
+  background: rgba(255, 250, 240, .94);
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 700;
+}
+.bt-gauge-name { margin-right: 4px; }
+.bt-pip { font-size: 20px; line-height: 1.2; transition: opacity .3s, transform .3s, filter .3s; }
+.bt-pip.off { opacity: .22; filter: grayscale(1); transform: scale(.8); }
+
+/* ハートと仲間 */
+.bt-team { align-self: stretch; display: flex; flex-direction: column; align-items: center; gap: 6px; transition: filter .3s; }
+.bt-status { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 6px 10px; }
+.bt-hearts {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 1px 12px;
+  border-radius: 999px;
+  background: rgba(255, 250, 240, .94);
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 700;
+}
+.bt-hearts-name { margin-right: 4px; }
+.bt-heart { color: #e8445f; font-size: 22px; line-height: 1.1; transition: color .3s, transform .3s; }
+.bt-heart.off { color: #d6cfc4; transform: scale(.85); }
+.bt-buff { padding: 2px 12px; border-radius: 999px; background: #fff1c9; color: #7a4a00; font-size: 13px; font-weight: 700; }
+.bt-members {
+  --face: clamp(40px, min(9cqw, 15cqh), 72px);
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 4px clamp(8px, 2.4cqw, 22px);
+}
+.bt-members.many { --face: clamp(34px, min(7cqw, 12cqh), 58px); gap: 4px clamp(4px, 1.4cqw, 14px); }
+.bt-member { position: relative; z-index: 1; display: flex; flex-direction: column; align-items: center; transition: transform .2s; }
+.bt-member .bt-face { width: var(--face); font-size: calc(var(--face) * .55); }
+.bt-member .bt-name { font-size: 12px; }
+.bt-members.many .bt-name { padding: 1px 6px; font-size: 11px; }
+/* 操作するキャラは金色のふち。いま動いているキャラは、少し持ち上げて光らせる */
+.bt-member.leader .bt-face { box-shadow: 0 0 0 3px #ffd36b, 0 6px 16px rgba(0, 0, 0, .3); }
+.bt-member.acting { transform: translateY(-6px) scale(1.08); }
+.bt-member.acting .bt-face { box-shadow: 0 0 0 3px #fff, 0 0 16px 6px rgba(255, 230, 140, .95); }
+.bt-member.helped .bt-face { box-shadow: 0 0 0 3px #bfeaff, 0 0 16px 6px rgba(150, 220, 255, .95); }
+/* 決め技：仲間の列を、ニンフィアのリボンでつなぐ */
+.bt-members.ribbon::before {
+  content: "";
+  position: absolute;
+  z-index: 0;
+  left: 2%;
+  right: 2%;
+  top: calc(var(--face) / 2 - 4px);
+  height: 8px;
+  border-radius: 4px;
+  background: linear-gradient(90deg, #ff8fbf, #ffd3e6 50%, #ff8fbf);
+  box-shadow: 0 0 12px 2px rgba(255, 150, 200, .85);
+  transform-origin: center;
+  animation: bt-ribbon .7s ease-out both;
+}
+
+/* コマンド（数字のキーでも選べる） */
+.bt-menu { align-self: stretch; display: flex; flex-direction: column; align-items: center; gap: 6px; min-height: 62px; cursor: auto; }
+.bt-cmds { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; width: min(760px, 100%); }
+.bt-cmd {
+  flex: 1 1 200px;
+  max-width: 300px;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  column-gap: 10px;
+  padding: 8px 14px;
+  border-radius: 14px;
+  border: 2px solid var(--gold);
+  background: rgba(255, 250, 240, .97);
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, .3);
+  animation: rise .25s ease-out both;
+}
+.bt-cmd:nth-child(2) { animation-delay: .05s; }
+.bt-cmd:nth-child(3) { animation-delay: .1s; }
+.bt-cmd:hover, .bt-cmd:focus-visible { background: #fff3d6; }
+.bt-cmd-key {
+  grid-row: 1 / span 2;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: #f3e2b8;
+  color: #7a5a1a;
+  font-size: 13px;
+  font-weight: 700;
+}
+.bt-cmd-name { font-size: 17px; font-weight: 700; line-height: 1.3; }
+.bt-cmd-note { font-size: 12px; line-height: 1.4; color: var(--ink-soft); }
+.bt-skip {
+  min-height: 34px;
+  padding: 4px 16px;
+  border-radius: 999px;
+  background: rgba(60, 20, 50, .55);
+  color: #fff;
+  font-size: 14px;
+  text-decoration: none;
+}
+
+/* 動き（data.js の文に合わせて、雪だるま・ハート・仲間を動かす） */
+.bt-foes.fx-hit .bt-face { animation: bt-hit .45s; }
+.bt-foes.fx-bounce .bt-face { animation: bt-bounce .5s; }
+.bt-foes.fx-break .bt-face { animation: bt-break .8s; }
+.bt-foes.fx-regen .bt-pip:not(.off) { animation: bt-pop .5s; }
+.bt-foes.broken .bt-face { filter: saturate(.5) brightness(1.08); }
+.bt-team.fx-damage .bt-hearts { animation: shake .4s; background: #ffe1e6; }
+.bt-team.fx-heal .bt-hearts { animation: bt-glow .7s; }
+.bt-team.fx-cheer .bt-face { animation: bt-glow .7s; }
+.bt-team.lost { filter: grayscale(.7) brightness(.85); }
+@keyframes bt-hit {
+  0%, 100% { transform: none; }
+  20% { transform: translateX(-7px) rotate(-5deg); filter: brightness(1.5); }
+  45% { transform: translateX(6px) rotate(4deg); }
+  70% { transform: translateX(-3px); }
+}
+@keyframes bt-bounce {
+  0%, 100% { box-shadow: 0 6px 16px rgba(0, 0, 0, .3); }
+  30% { box-shadow: 0 0 0 6px rgba(255, 255, 255, .95), 0 0 20px 10px rgba(190, 230, 255, .95); }
+}
+@keyframes bt-break {
+  0% { transform: none; }
+  30% { transform: scale(1.18) rotate(-8deg); filter: brightness(1.7); }
+  60% { transform: scale(.94) rotate(5deg); }
+  100% { transform: none; }
+}
+@keyframes bt-pop { 0% { transform: scale(.4); } 60% { transform: scale(1.35); } 100% { transform: none; } }
+@keyframes bt-glow { 0%, 100% { filter: none; } 50% { filter: brightness(1.3) drop-shadow(0 0 8px rgba(255, 240, 150, .95)); } }
+@keyframes bt-ribbon { from { transform: scaleX(0); opacity: 0; } to { transform: none; opacity: 1; } }
+
+/* 縦長の画面（スマホ）：コマンドを縦に並べる */
+@media (max-width: 640px) {
+  .bt-cmds { flex-direction: column; align-items: stretch; }
+  .bt-cmd { flex: none; max-width: none; padding: 6px 12px; }
+}
+
+/* ---------------- PCだけで使うイラスト（data.js の SETTINGS.pcArt） ---------------- */
+/*  pc-images フォルダの画像が見つかったときは、絵文字の代わりに画像を丸の中に出す */
+.has-art {
+  background: radial-gradient(circle at 50% 42%, rgba(255, 255, 255, .92), rgba(255, 255, 255, .55) 62%, transparent 80%), var(--c, #ddd);
+}
+.has-art > .art {
+  display: block;
+  width: 90%;
+  height: 90%;
+  object-fit: contain;
+  pointer-events: none;
+  -webkit-user-drag: none;
+  filter: drop-shadow(0 2px 3px rgba(0, 0, 0, .28));
+}
+
 /* ---------------- 最後の謎の枠（data.js の PUZZLE） ---------------- */
 /* 入力欄の高さ（--layer-h）の分だけ、上によせて表示する */
 .puzzle-box {

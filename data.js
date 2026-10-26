@@ -42,6 +42,7 @@
 //              （書き方は sylveon の場面と README の「歩けるマップ」を参照）
 //    events  : 歩けるマップの人物・出入口と、そこで起きること（say・set・next）
 //    start / goal / team : 歩き始める場所・画面に出す目的・集まった仲間の表示
+//    battle  : 戦い（下の BATTLES の名前）。会話のあとに戦いが始まり、勝つと next へ進む
 //    puzzle  : true で最後の謎の枠（下の PUZZLE）を表示する
 //    set     : 条件の名前を記録する（unset で消す）。選択肢にも書ける
 //    draft   : true にすると画面に「仮の内容」と表示（作りかけの目印）
@@ -68,6 +69,8 @@ const SETTINGS = {
   defaultName: "きみ",        // 名前を入れる前の呼び名（{name} に入る）
   chatTitle: "イーブイと なかまたち", // メッセージ画面の上に出る名前（場面ごとにも変えられる）
   textSpeed: 30,             // 文字が出る速さ（1文字あたりのミリ秒。0 で一瞬）
+  battleAuto: 1100,          // 戦いの文が、自動で次へ進むまでの時間（ミリ秒。0 でクリックを待つ）
+                             // （キャラクターのセリフは、いつもクリックを待つ）
   siteUrl: "https://kurataka123-ctrl.github.io/game/", // 公開後のURL。カードのQRコードに使う
   saveKey: "eevee-xmas-save-v3", // 記録の保存名（ふつうは変えない）
 
@@ -94,6 +97,14 @@ const SETTINGS = {
     station: "~hub3hua9h/Higu7M",  // 鏡に書く駅名（カタカナ）。鏡の場面でスキップしたときに表示
     park: "~jPjkjfSkh/PLh87L",     // リーフィアのいる公園の名前
   },
+
+  // ---- PCだけで使うイラスト（インターネットには出さない） ----
+  //  PCで index.html を直接開いたときだけ、このフォルダの画像をキャラクターの絵にします。
+  //  画像の名前は、CHARACTERS の名前（eevee など）と同じにします（例：pc-images/eevee.png）。
+  //  画像がないキャラクターは、今までどおり絵文字で表示します。
+  //  公開したページ（iPhone）と、メッセージ画面では使いません（README の「PCで公式のイラストを使う」）。
+  //  ※ このフォルダは、GitHub に入れないでください（.gitignore で除外しています）。
+  pcArt: "pc-images",   // 使わないときは ""
 };
 
 
@@ -107,24 +118,29 @@ const STATION = ["#e0b64061", "#63d89d2c", "#ac8aeee0", "#5dac896f", "#c521936a"
 //  name: 表示名 / emoji: 仮の絵（絵文字） / color: テーマ色
 //  word: そのポケモンからもらう言葉（最後の謎で使う。文字は光らせない）
 //  voice: true の人物は、姿を出さずに名前の札だけ出す（声だけ聞こえるとき）
-//  ※ 公式の画像は使わず、絵文字と色で表しています。
+//  art: PCだけで使うイラストの画像の名前（SETTINGS の pcArt のフォルダの中。.png などは書かない）
+//       例：art: "eevee" → pc-images/eevee.png（.webp .jpg でもよい）。art がないキャラクターは絵文字だけ
+//  ※ 公開ページ（iPhone）では公式の画像を使わず、絵文字と色で表しています。
 const CHARACTERS = {
   hero:     { name: "主人公",     emoji: "🧒", color: "#7aa7ff" },  // 画面では、入力した名前で表示
-  eevee:    { name: "イーブイ",   emoji: "🦊", color: "#d8b07a" },
-  glaceon:  { name: "グレイシア", emoji: "❄️", color: "#8fd8ec", word: "スノークリスタル" },
-  sylveon:  { name: "ニンフィア", emoji: "🎀", color: "#f6b3cf", word: "リボン" },
-  espeon:   { name: "エーフィ",   emoji: "🔮", color: "#d2a8e6", word: "メッセージ" },
-  umbreon:  { name: "ブラッキー", emoji: "🌙", color: "#5a5f86", word: "ミステリー" },
-  vaporeon: { name: "シャワーズ", emoji: "💧", color: "#6bb3ee", word: "シャワー" },
-  flareon:  { name: "ブースター", emoji: "🔥", color: "#f59a5c", word: "クッキング" },
-  jolteon:  { name: "サンダース", emoji: "⚡", color: "#f4d65a", word: "スピード" },
-  leafeon:  { name: "リーフィア", emoji: "🍃", color: "#98cf78", word: "マップ" },
+  eevee:    { name: "イーブイ",   emoji: "🦊", color: "#d8b07a", art: "eevee" },
+  glaceon:  { name: "グレイシア", emoji: "❄️", color: "#8fd8ec", word: "スノークリスタル", art: "glaceon" },
+  sylveon:  { name: "ニンフィア", emoji: "🎀", color: "#f6b3cf", word: "リボン", art: "sylveon" },
+  espeon:   { name: "エーフィ",   emoji: "🔮", color: "#d2a8e6", word: "メッセージ", art: "espeon" },
+  umbreon:  { name: "ブラッキー", emoji: "🌙", color: "#5a5f86", word: "ミステリー", art: "umbreon" },
+  vaporeon: { name: "シャワーズ", emoji: "💧", color: "#6bb3ee", word: "シャワー", art: "vaporeon" },
+  flareon:  { name: "ブースター", emoji: "🔥", color: "#f59a5c", word: "クッキング", art: "flareon" },
+  jolteon:  { name: "サンダース", emoji: "⚡", color: "#f4d65a", word: "スピード", art: "jolteon" },
+  leafeon:  { name: "リーフィア", emoji: "🍃", color: "#98cf78", word: "マップ", art: "leafeon" },
 
-  // 1-3 の仲間（部屋にあるぬいぐるみと同じポケモン）と相手
-  charizard: { name: "リザードン", emoji: "🐉", color: "#f0904e" },
-  clefairy:  { name: "ピッピ",     emoji: "🧚", color: "#f7b8cb" },
-  axew:      { name: "キバゴ",     emoji: "🐲", color: "#b7d36a" },
-  snowman:   { name: "雪だるま",   emoji: "⛄", color: "#dbe8f4" },
+  // 1-3 の仲間（部屋にあるぬいぐるみと同じポケモン）
+  charizard: { name: "リザードン", emoji: "🐉", color: "#f0904e", art: "charizard" },
+  clefairy:  { name: "ピッピ",     emoji: "🧚", color: "#f7b8cb", art: "clefairy" },
+  axew:      { name: "キバゴ",     emoji: "🐲", color: "#b7d36a", art: "axew" },
+
+  // 1-3 の相手：いたずら雪だるま2体（名前は【仮】）
+  snowman1:  { name: "よろい雪だるま",   emoji: "⛄", color: "#bfe3f5" },  // 第1戦：氷のよろいを着ている
+  snowman2:  { name: "ころがり雪だるま", emoji: "☃️", color: "#e3ebf5" },  // 第2戦：転がって暴れる
 
   // 1-3 の人間組（息子さんの友達）。呼び名は SETTINGS の local（遊ぶ前にPCで入れる）
   friend1:   { name: "{friend1}", emoji: "🧑", color: "#8fb4e8" },
@@ -302,7 +318,7 @@ const SCENES = {
       "一面の花畑に出た。ところどころ、花が白くこおりついている。",
       "花の香りの奥から、ぱたぱた走る音と、何かが転がる音が聞こえる。",
       "ニンフィア：いらっしゃい！　……と言いたいけど、今それどころじゃないの。",
-      "ニンフィア：いたずら雪だるまが来て、花畑を半分こおらせちゃった。",
+      "ニンフィア：いたずら雪だるまが2体も来て、花畑を半分こおらせちゃった。",
       "イーブイ：ひとりで追い返せないの？",
       "ニンフィア：うん、ひとりじゃ無理なの。",
       "ニンフィア：この花畑のどこかに、手を貸してくれそうな子がいるはず。一緒に探して！",
@@ -416,37 +432,67 @@ const SCENES = {
     ],
   },
 
-  // ★ 仮の戦い：あとで「選択式のバトル」（2組で順番に戦う）に置きかえる
+  // ---- 1-3 の戦い（作る順番4）：2組で、1組ずつ順番に戦う ----
+  //  第1戦（ポケモン組）→ 第2戦（人間組）→ 決め技（2組そろって）。
+  //  戦いの決まり・技・数値・戦いの中のセリフは、下の BATTLES と MOVES に書いている。
+  //  battle を書いた場面は、会話（lines）のあとに戦いが始まり、勝つと next の場面へ進む。
   sylveon_battle: {
     bg: "memory",
-    draft: true,
+    show: ["snowman1", "snowman2", "sylveon"],
     lines: [
-      "そのとき、花畑の向こうから、大きな雪だるまが転がってきた！",
-      "雪だるま：ゆきだるまは、ころがるのが仕事！　花も道も、ぜーんぶ真っ白にしてやる！",
-      "雪だるまは、氷のよろいを着ている。",
-      "ニンフィア：どうしよう……。みんなで、どう戦う？",
+      "そのとき、花畑の向こうから、雪だるまが2体転がってきた！",
+      "よろい雪だるま：ゆきだるまは、ころがるのが仕事！",
+      "ころがり雪だるま：花も道も、ぜーんぶ真っ白にしてやる！",
+      "1体は、氷のよろいを着ている。もう1体は、転がったまま止まらない。",
+      "ニンフィア：2体いっぺんは無理……。1体ずつ、順番に戦おう！",
+      "ニンフィア：まずはポケモンのみんな、よろいの雪だるまをお願い！",
     ],
-    choices: [
-      { text: "ニンフィアにまかせる", reply: ["ニンフィアのリボンが、氷のよろいにはね返された！", "ニンフィア：ひとりじゃ無理……！"] },
-      { text: "リザードンの炎で攻める", reply: ["リザードン：炎は通った。もう少しだ！", "雪だるま：あつっ！　でも、まだよろいが残ってるぞ！"] },
-      { text: "みんなでいっせいに", next: "sylveon_win" },
+    next: "sylveon_battle1",
+  },
+
+  // 第1戦：ポケモン組（操作するのはイーブイ）
+  sylveon_battle1: {
+    bg: "memory",
+    battle: "snowman1",
+    lines: [
+      "よろい雪だるまが、立ちはだかった！",
+      "イーブイ：{name}、ぼくの動きを決めて！　みんなは、それぞれ自分で動くよ。",
     ],
+    next: "sylveon_battle2",
+  },
+
+  // 第2戦：人間組（操作するのは主人公）
+  sylveon_battle2: {
+    bg: "memory",
+    battle: "snowman2",
+    lines: [
+      "ころがり雪だるま：よくも、よろいをとかしたな！",
+      "ころがり雪だるま：いくぞー！　ころころ、どーん！",
+      "ころがり雪だるまが、すごいいきおいで転がってきた！",
+      "{friend1}：次は、こっちの番だ！",
+      "{friend2}：人間組、いくよ！",
+      "イーブイ：{name}、みんなをお願い！",
+    ],
+    next: "sylveon_finale",
+  },
+
+  // 決め技：2組そろって（ニンフィアのリボンが2組をつなぐ）
+  sylveon_finale: {
+    bg: "memory",
+    battle: "finale",
+    lines: [
+      "ニンフィア：止まった！　今だよ。みんな、力を合わせよう！",
+      "よろい雪だるま：こうなったら、2体で花畑ごとこおらせてやる！",
+      "ニンフィア：ポケモン組と人間組、どっちの力もいるの！",
+    ],
+    next: "sylveon_win",
   },
 
   sylveon_win: {
-    draft: true,
+    bg: "memory",
     give: "sylveon",
     lines: [
-      "リザードンの炎で、氷のよろいがとけた。",
-      "転がり出した雪だるまを、ニンフィアのリボンがつかまえる。",
-      "ニンフィア：止まった！　今だよ。みんな、力を合わせよう！",
-      "リザードン：おう！",
-      "ピッピ：ピィー！",
-      { if: "axew", text: "キバゴ：キバー！" },
-      "{friend1}たちも、声をそろえた。",
-      "ニンフィア：せーのっ！",
-      "雪だるま：うわーっ！　みんなで来るなんて聞いてないぞー！",
-      "雪だるま：……でも、花畑をこおらせたのは、ごめん。",
+      "雪だるまたちは、ころころと転がって、花畑から出ていった。",
       "ニンフィア：やったあ！　ね、ひとりじゃ無理でも、みんなとならできたでしょ？",
       "ニンフィア：わたしは、だれかと一緒にいる時間が大好き。",
       "ニンフィア：笑い声が重なると、うれしさも倍になるの。",
@@ -1277,6 +1323,231 @@ const SCENES = {
 };
 
 
+// ---------------- 戦い（1-3 ニンフィアの花畑） ----------------
+//  ドラクエ風の選択式バトルです（設計書 第5節）。
+//  場面に battle: "戦いの名前" と書くと、会話のあとに戦いが始まり、勝つと next の場面へ進みます。
+//
+//  【決まり】
+//    ・操作するのは、各組の1人（leader）だけ。毎ターン、コマンド（commands）から選ぶ。
+//    ・ほかの仲間は、さくせん（tactics）のとおりに自動で動く。
+//    ・動く順番：leader → party の上から順 → 雪だるま（元にもどる → 攻撃 → ふぶき）
+//    ・ハートは組で共通（hearts）。0 になったら負け。
+//      負けたら、ニンフィアのヒント（lose）を聞いて、その戦いの最初からやり直す。
+//    ・雪だるまの「ゲージ」（よろい・いきおい）を 0 にしたら勝ち。
+//    ・数値は固定で、乱数は使わない（同じ選び方をすれば、いつも同じ結果になる）。
+//
+//  ※【仮】の数値・技・セリフは、あとで差し替えてかまいません。
+//    変えたら ?debug の 🛠 で「戦いの点検」を見て、勝てなくなっていないか確かめてください
+//    （何ターンで勝てるか、何ターンで負けるかを、自動で調べて表示します）。
+//
+//  【書き方】
+//    title    : 画面の左上に出す名前
+//    hearts   : ハートの数（組で共通）。0 にすると、ハートを使わない（決め技）
+//    leader   : 操作するキャラ（CHARACTERS の名前）
+//    commands : 操作するキャラのコマンド（下の MOVES の名前）
+//    party    : 一緒に戦う仲間（上から順に動く）。leader を書いた場所に leader を並べる
+//               { who: 仲間, tactics: さくせん, if: 条件 }
+//               "sylveon" のように名前だけ書くと、並ぶだけで動かない
+//    tactics  : さくせん。上から順に調べて、条件に合った最初の技を使う
+//               { move: "bench", hearts: 2 }    … ハートが 2 以下のとき
+//               { move: "hello", cheer: false }  … 力アップが切れているとき
+//               { move: "pingpong" }             … 条件なし（いつでも）。"pingpong" とだけ書いてもよい
+//    enemy    : 雪だるま
+//      who      : CHARACTERS の名前（2体なら [ ] で囲む）
+//      gauge    : ゲージの名前（0 にすると勝ち）。icon はゲージの印、max はゲージの大きさ
+//      weak     : ゲージを減らせる技のタイプ（MOVES の type）。ほかの技は、はね返される
+//      regen    : true なら、減らしきれなかったゲージが、ターンの終わりに元にもどる
+//      damage   : 雪だるまの攻撃で、毎ターン減るハートの数（0 なら攻撃しない）
+//      blizzard : 何ターンに1回、ふぶきが来るか（ハート−1。0 なら来ない）
+//      bounce / hit / hitSay / regenText / attackText / blizzardText / break :
+//                 はね返されたとき・ゲージが減ったとき（hitSay は最初の1回だけ）・
+//                 元にもどったとき・攻撃・ふぶき・ゲージが 0 になったとき の文
+//    hints    : 戦っている間のヒント。turn ターン目の始めに出す
+//               （最後のヒントは、そのあとも2ターンごとにくり返す）
+//    lose     : 負けたときのヒント（負けるたびに1つずつ。最後のものは何度でも）
+//    skip     : after 回負けると出す、あきらめるボタン（氷の床の skip と同じ書き方）
+//
+//  ※ 文の中の {who} は技を使った人、{name} などは、いつもどおり置きかわります。
+
+// 技（わざ）。BATTLES の commands と tactics から使います
+//    name  : 技の名前（コマンドのボタンにも出る）
+//    kind  : 技の種類
+//            "attack" … 雪だるまのゲージを power だけ減らす（type が雪だるまの weak にあるときだけ）
+//            "help"   … 次に動く仲間の技を power 倍にする（てだすけ）
+//            "cheer"  … 組の全員の攻撃を +power にする（turns ターンのあいだ）
+//            "heal"   … ハートを power だけふやす（hearts の数まで）
+//    type  : 攻撃のタイプ（雪だるまの weak と比べる）
+//    note  : コマンドのボタンに出す、短い説明（操作するキャラの技だけ）
+//    text  : 技を使ったときの文（書かなければ「〇〇の 技の名前！」）
+//    say   : 技を使ったときに続けて出す文（なくてもよい）
+//    bounce: はね返されたときの文（書かなければ、雪だるまの bounce）
+//    ribbon: true にすると、技を使ったときに、仲間の列をリボンでつないで見せる
+const MOVES = {
+  // ---- ポケモン組 ----
+  tackle:    { name: "たいあたり", kind: "attack", power: 1, type: "body", note: "体ごとぶつかって攻撃する" },
+  help:      { name: "てだすけ", kind: "help", power: 2, note: "次に動く仲間の技が、2倍になる" },
+  fire:      { name: "ほのお", kind: "attack", power: 1, type: "fire" },
+  moonlight: { name: "月の光", kind: "heal", power: 1 },
+  pound:     { name: "はたく", kind: "attack", power: 1, type: "body" },
+  scratch:   { name: "ひっかく", kind: "attack", power: 1, type: "body" },   // キバゴの技【仮】
+
+  // ---- 人間組（友達の技は、設計書のとおり） ----
+  snowball:  { name: "雪玉を投げる", kind: "attack", power: 1, type: "body", text: "{who}は、雪玉を投げた！", note: "雪玉を投げて攻撃する" },
+  catch:     { name: "つかまえる", kind: "attack", power: 1, type: "catch", text: "{who}は、雪だるまに飛びついた！", note: "飛びついて、転がるのを止める" },
+  pingpong:  { name: "ピンポンアタック", kind: "attack", power: 1, type: "ball" },
+  hello:     { name: "ぶんぶんハローYouTube", kind: "cheer", power: 1, turns: 2 },
+  bench:     { name: "ベンチホテル", kind: "heal", power: 1 },
+
+  // ---- 決め技（2組そろって） ----
+  together: {
+    name: "みんなでいっせいに", kind: "attack", power: 1, type: "together", ribbon: true,
+    note: "全員の力を、ひとつに合わせる",
+    text: "{who}の合図で、みんながいっせいに動いた！",
+    say: [
+      "ニンフィアのリボンが、ふたつの組をつないだ！",
+      "リザードン：おう！",
+      "ピッピ：ピィー！",
+      { if: "axew", text: "キバゴ：キバー！" },
+      "{friend1}：いくぞ！",
+      "ニンフィア：せーのっ！",
+    ],
+  },
+  alone: {
+    name: "ひとりで立ち向かう", kind: "attack", power: 1, type: "body",
+    note: "自分ひとりで、2体に向かっていく",
+    text: "{who}は、ひとりで立ち向かった！",
+    bounce: ["2体の雪だるまに、押し返された！", "ニンフィア：ひとりじゃ無理だよ。みんなの力を合わせよう！"],
+  },
+  leave: {
+    name: "ニンフィアにまかせる", kind: "attack", power: 1, type: "ribbon",
+    note: "ニンフィアのリボンに、まかせる",
+    text: "{who}は、ニンフィアにまかせた！",
+    bounce: ["ニンフィアのリボンが、はね返された！", "ニンフィア：わたしひとりじゃ、無理……！"],
+  },
+};
+
+const BATTLES = {
+  // ---- 第1戦：ポケモン組 × よろい雪だるま（旧案の段階1） ----
+  //  氷のよろいは、ほのお2回分でとける。1回分だけだと、ターンの終わりに固め直されてしまう。
+  //  イーブイの「てだすけ」で、リザードンの ほのおを2倍にすると、一度にとける。【仮】
+  //  ピッピの月の光（ハートが2以下のとき）があるので、この戦いでは負けない。
+  snowman1: {
+    title: "第1戦　ポケモン組",
+    hearts: 3,
+    leader: "eevee",
+    commands: ["tackle", "help"],
+    party: [
+      { who: "eevee" },
+      { who: "charizard", tactics: "fire" },                                              // 毎ターン ほのお【仮】
+      { who: "clefairy", tactics: [{ move: "moonlight", hearts: 2 }, { move: "pound" }] }, // ハートが2以下なら月の光【仮】
+      { who: "axew", if: "axew", tactics: "scratch" },                                     // 仲間にしたときだけ【仮】
+    ],
+    enemy: {
+      who: "snowman1",
+      gauge: "よろい", icon: "🧊", max: 2,
+      weak: ["fire"],
+      regen: true,
+      damage: 0,
+      blizzard: 2,   // 2ターンに1回ふぶき【仮】
+      bounce: "氷のよろいに、はね返された！",
+      hit: "よろいが、少しとけた！",
+      hitSay: [
+        "リザードン：炎は通った。もう少しだ！",
+        "よろい雪だるま：あつっ！　でも、まだよろいが残ってるぞ！",
+      ],
+      regenText: "よろい雪だるまは、とけたよろいを固め直した！",
+      blizzardText: "よろい雪だるまの ふぶき！",
+      break: [
+        "氷のよろいが、すっかりとけた！",
+        "よろい雪だるま：あつつつ……！　よろいが……！",
+        "ニンフィア：やった！　よろいがなくなった！",
+      ],
+    },
+    hints: [
+      { turn: 3, say: ["ニンフィア：炎は効いてる！　でも、とけきる前に固められちゃう……。"] },
+      { turn: 5, say: ["ニンフィア：リザードンの炎を、一度に強くできたら……。", "ニンフィア：イーブイの「てだすけ」は、どうかな？"] },
+    ],
+  },
+
+  // ---- 第2戦：人間組 × ころがり雪だるま（旧案の段階2） ----
+  //  転がっているあいだは、攻撃が当たらない。つかまえて止めるしかない（いきおい2）。
+  //  ひとりの力（1）では止めきれず、ターンの終わりに、また転がりだす。
+  //  友達2の ぶんぶんハローYouTube で力が上がっているあいだ（+1）に、つかまえると止まる。【仮】
+  //  転がる体当たりで毎ターン ハート−1。2ターン目か4ターン目につかまえないと、負ける。
+  snowman2: {
+    title: "第2戦　人間組",
+    hearts: 3,
+    leader: "hero",
+    commands: ["snowball", "catch"],
+    party: [
+      { who: "hero" },
+      { who: "friend1", tactics: "pingpong" },                                             // 毎ターン
+      { who: "friend2", tactics: [{ move: "hello", cheer: false }, { move: "snowball" }] }, // 力アップが切れているとき
+      { who: "friend3", tactics: [{ move: "bench", hearts: 2 }, { move: "snowball" }] },    // ハートが2以下のとき
+    ],
+    enemy: {
+      who: "snowman2",
+      gauge: "いきおい", icon: "🌀", max: 2,
+      weak: ["catch"],
+      regen: true,
+      damage: 1,     // 転がる体当たりで、毎ターン ハート−1
+      blizzard: 2,   // 2ターンに1回ふぶき【仮】
+      bounce: "転がるいきおいで、はじき飛ばされた！",
+      hit: "いきおいが、少し弱まった！",
+      hitSay: ["{friend3}：ひとりの力じゃ、止めきれないよ！"],
+      regenText: "ころがり雪だるまは、また転がりだした！",
+      attackText: "ころがり雪だるまの 体当たり！",
+      blizzardText: "ころがり雪だるまの ふぶき！",
+      break: [
+        "{name}が、ころがり雪だるまを がっちりつかまえた！",
+        "ころがり雪だるま：わわっ、止まっちゃった！",
+      ],
+    },
+    hints: [
+      { turn: 3, say: ["ニンフィア：転がっているあいだは、技が当たらないみたい……。"] },
+    ],
+    lose: [
+      ["ニンフィア：転がり出したら、何かでつかまえないと止まらないよ。"],
+      ["ニンフィア：ひとりの力じゃ、止めきれないみたい。", "ニンフィア：{friend2}の応援で、力が上がっているときに、つかまえてみて！"],
+    ],
+    skip: {
+      after: 3,
+      text: "どうしても止められない（ニンフィアに手伝ってもらう）",
+      reply: [
+        "ニンフィア：わたしのリボンで、つかまえるね！",
+        "ニンフィアのリボンが、ころがり雪だるまをつかまえた！",
+      ],
+      next: "sylveon_finale",
+    },
+  },
+
+  // ---- 決め技：2組そろって（旧案の段階3） ----
+  //  ニンフィアのリボンが2組をつなぐ。「みんなでいっせいに」を選ぶと勝ち。
+  //  決め技を選ぶキャラは【仮】で主人公。ほかのコマンドは、理由を聞いて選び直す（ハートは減らない）
+  finale: {
+    title: "決め技　2組そろって",
+    hearts: 0,
+    leader: "hero",
+    commands: ["together", "alone", "leave"],
+    party: ["eevee", "charizard", "clefairy", { who: "axew", if: "axew" }, "sylveon", { who: "hero" }, "friend1", "friend2", "friend3"],
+    enemy: {
+      who: ["snowman1", "snowman2"],
+      gauge: "", max: 1,
+      weak: ["together"],
+      regen: false,
+      damage: 0,
+      blizzard: 0,
+      bounce: "2体の雪だるまに、押し返された！",
+      break: [
+        "みんなの力が、ひとつになって届いた！",
+        "よろい雪だるま：うわーっ！　みんなで来るなんて聞いてないぞー！",
+        "ころがり雪だるま：……でも、花畑をこおらせたのは、ごめん。",
+      ],
+    },
+  },
+};
+
+
 // ---------------- 最後の謎の枠（最終章 4-2） ----------------
 //  1行が、言葉1つ分の枠です。上から順に表示します。
 //    □ ：言葉が入るマス（空らん）
@@ -1430,6 +1701,32 @@ const UI = {
   walkThing: "{item}だ。",
   walkTeam: "集まった仲間",
   walkTeamNone: "まだ、だれもいない",
+
+  // 戦い（BATTLES・MOVES）。雪だるまごとの文は BATTLES に書く
+  battleAsk: "{who}は どうする？",
+  battleUse: "{who}の {move}！",
+  battleBoost: "てだすけで、いつもの{n}倍の力だ！",
+  battleBounce: "でも、効かなかった！",
+  battleHit: "{gauge}が、少し減った！",
+  battleBreak: "{gauge}が、なくなった！",
+  battleRegen: "{enemy}の{gauge}が、元にもどった！",
+  battleHelp: "{target}の技が、{n}倍になる！",
+  battleHelpNone: "でも、手伝える仲間がいない……。",
+  battleCheer: "みんなの攻撃が、{n}ターンのあいだ強くなる！",
+  battleCheerEnd: "力アップの効き目が切れた。",
+  battleHeal: "ハートが{n}つふえた！",
+  battleHealFull: "ハートは、もう満タンだ。",
+  battleAttack: "{enemy}の 攻撃！",
+  battleBlizzard: "ふぶきが吹きつけた！",
+  battleDamage: "ハートが{n}つへった！",
+  battleLose: "ハートが、なくなってしまった……！",
+  battleRetry: "ハート{n}つで、もう一度！",
+  battleTurn: "ターン{n}",
+  battleStorm: "❄ 次のふぶき：ターン{n}の終わり",
+  battleStormNow: "❄ このターンの終わりに、ふぶき！",
+  battleHearts: "ハート",
+  battleCheerOn: "💪 力アップ中（あと{n}ターン）",
+  battleSkip: "どうしても勝てない",
 
   // 章の終わり
   endNext: "つづける",
