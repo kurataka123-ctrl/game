@@ -2543,6 +2543,7 @@
   }
 
   // give: "glaceon" → 会話のあとに、その仲間の言葉を手に入れる
+  // afterWord：言葉を受けとったあとに続ける会話（選択肢・入力が続くときは、最後の行のあとすぐに出す）
   function giveWord(sc, view, then) {
     const id = typeof sc.give === "string" ? sc.give : null;
     if (!id || !CHARS[id] || !CHARS[id].word) {
@@ -2551,7 +2552,8 @@
     }
     if (!state.words.includes(id)) state.words.push(id);
     storage.save(state);
-    view.reveal(id, then);
+    const afterWord = () => view.say(sc.afterWord, then, !(hasChoices(sc) || sc.input));
+    view.reveal(id, sc.afterWord ? afterWord : then);
   }
 
   function leave(sc, view) {
@@ -3021,6 +3023,10 @@
       for (const g of toArray(sc.give)) {
         if (!CHARS[g]) errors.push(`${at} の give：「${g}」というキャラクターがいません。`);
         else if (!CHARS[g].word) errors.push(`${at} の give：「${CHARS[g].name}」に word（言葉）が書かれていません。`);
+      }
+      if (sc.afterWord != null) {
+        checkLines(sc.afterWord, `${at} の afterWord`);
+        if (typeof sc.give !== "string") warnings.push(`${at} の afterWord：give に1匹の名前を書いた場面でないと、表示されません。`);
       }
       if (sc.end) {
         check(sc.end.next, `${at} の end`);
