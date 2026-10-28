@@ -788,6 +788,15 @@ button { font: inherit; color: inherit; touch-action: manipulation; }
 }
 .grid-team-none { align-self: center; font-size: 12px; color: var(--ink-soft); }
 
+/* 家の地図が出ているときは、選択肢を横に並べて、地図を大きく見せる */
+.stage.house-mode .choices { flex-direction: row; flex-wrap: wrap; justify-content: center; width: min(920px, 100%); }
+.stage.house-mode .choice { flex: 1 1 auto; min-height: 46px; padding: 10px 16px; }
+
+/* 歩けるマップで選択肢が出たときは、右下（矢印ボタンの上）に出して、地図をかくさない */
+.stage.walk-mode .stage-layer { align-items: flex-end; padding: 10px 12px; }
+.stage.walk-mode .choices { width: min(230px, 100%); }
+.stage.walk-mode .choice { min-height: 44px; padding: 8px 14px; font-size: 16px; }
+
 /* 縦長の画面（スマホ）では、ボタンを盤面の下に出す */
 @media (max-width: 640px) {
   .grid-wrap { flex-direction: column; gap: 8px; }
@@ -843,13 +852,29 @@ button { font: inherit; color: inherit; touch-action: manipulation; }
   white-space: nowrap;
 }
 
-/* 雪だるまとゲージ */
-.bt-foes { flex: 1; min-height: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; }
-.bt-foe-row { display: flex; gap: clamp(12px, 6cqw, 56px); }
+/* 相手と、相手のハート（コマンドの場所が大きいときは、相手を小さくする） */
+.bt-foes {
+  flex: 1;
+  min-height: 0;
+  align-self: stretch;
+  container-type: size;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+}
+.bt-foe-wrap { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; }
+.bt-foe-row { --foe: clamp(30px, min(18cqw, calc(100cqh - 62px)), 140px); display: flex; gap: clamp(12px, 6cqw, 56px); }
+/* 高さが足りないときは、相手のハートを横に並べて、相手を大きく見せる */
+@container (max-height: 170px) {
+  .bt-foe-wrap { flex-direction: row; gap: 14px; }
+  .bt-foe-row { --foe: clamp(30px, calc(100cqh - 30px), 120px); }
+}
 .bt-foe { display: flex; flex-direction: column; align-items: center; }
 .bt-foe .bt-face {
-  width: clamp(60px, min(18cqw, 26cqh), 140px);
-  font-size: clamp(34px, min(10cqw, 15cqh), 80px);
+  width: var(--foe);
+  font-size: calc(var(--foe) * .58);
   animation: bob 3.2s ease-in-out infinite;
 }
 .bt-foe:nth-child(2) .bt-face { animation-delay: -1.4s; }
@@ -869,7 +894,7 @@ button { font: inherit; color: inherit; touch-action: manipulation; }
 .bt-pip.off { opacity: .22; filter: grayscale(1); transform: scale(.8); }
 
 /* ハートと仲間 */
-.bt-team { align-self: stretch; display: flex; flex-direction: column; align-items: center; gap: 6px; transition: filter .3s; }
+.bt-team { align-self: stretch; display: flex; flex-direction: column; align-items: center; gap: 10px; transition: filter .3s; }
 .bt-status { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 6px 10px; }
 .bt-hearts {
   display: flex;
@@ -997,11 +1022,318 @@ button { font: inherit; color: inherit; touch-action: manipulation; }
 @keyframes bt-glow { 0%, 100% { filter: none; } 50% { filter: brightness(1.3) drop-shadow(0 0 8px rgba(255, 240, 150, .95)); } }
 @keyframes bt-ribbon { from { transform: scaleX(0); opacity: 0; } to { transform: none; opacity: 1; } }
 
+/* 相手のハート（多いときは小さく） */
+.bt-foes .bt-pip { color: #7fc3f5; }
+.bt-gauge.many .bt-pip { font-size: 17px; }
+/* 仲間の下に、選んだコマンド（または「ため中」）を小さく出す */
+.bt-plan {
+  min-height: 1.5em;
+  margin-top: 2px;
+  padding: 0 6px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.5;
+  white-space: nowrap;
+  color: #5a3d00;
+}
+.bt-plan:not(:empty) { background: rgba(255, 241, 201, .95); }
+.bt-member.charged .bt-face { box-shadow: 0 0 0 3px #ff9d5c, 0 0 14px 4px rgba(255, 150, 80, .8); }
+/* いまコマンドを選んでいる仲間 */
+.bt-member.choosing { transform: translateY(-3px) scale(1.06); }
+.bt-member.choosing .bt-face { box-shadow: 0 0 0 4px #fff, 0 0 18px 7px rgba(255, 214, 107, .95); animation: bt-glow 1.2s ease-in-out infinite; }
+.bt-member.choosing .bt-name { background: #ffb547; color: #3b2600; font-weight: 700; }
+.bt-team.fx-charge .bt-face { animation: bt-glow .7s; }
+.bt-foes.fx-guard .bt-face { animation: bt-bounce .5s; }
+.bt-menu-foot { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 6px 12px; }
+.bt-back {
+  min-height: 34px;
+  padding: 4px 16px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, .45);
+  color: #fff;
+  font-size: 14px;
+  text-decoration: none;
+}
+/* 仲間をえらぶ（集めた仲間から3人） */
+.bt-pick-note {
+  padding: 2px 12px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, .45);
+  color: #fff;
+  font-size: 13px;
+}
+.bt-picks { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; width: min(820px, 100%); }
+.bt-pick {
+  flex: 0 1 236px;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto auto 1fr;
+  grid-template-rows: auto auto;
+  align-items: center;
+  column-gap: 8px;
+  padding: 4px 10px;
+  border-radius: 14px;
+  border: 2px solid rgba(233, 189, 98, .7);
+  background: rgba(255, 250, 240, .9);
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, .25);
+  animation: rise .25s ease-out both;
+}
+.bt-pick .bt-cmd-key { grid-row: 1 / span 2; }
+.bt-pick-face {
+  grid-row: 1 / span 2;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: 22px;
+  line-height: 1;
+  background: radial-gradient(circle at 32% 28%, rgba(255, 255, 255, .6), transparent 55%), var(--c);
+}
+.bt-pick-name { font-size: 15px; font-weight: 700; line-height: 1.3; }
+.bt-pick-moves { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; line-height: 1.4; color: var(--ink-soft); }
+.bt-pick:hover { background: #fff3d6; }
+.bt-pick.on { border-color: #ff9d2e; background: #fff1c9; box-shadow: 0 0 0 3px #ffb547, 0 4px 12px rgba(0, 0, 0, .25); }
+.bt-pick.on .bt-cmd-key { background: #ff9d2e; color: #fff; }
+.bt-pick-ok { min-height: 44px; padding: 8px 22px; font-size: 16px; }
+.bt-pick-ok:disabled { opacity: .55; cursor: default; }
+.battle.picking .bt-team { display: none; }
+
 /* 縦長の画面（スマホ）：コマンドを縦に並べる */
 @media (max-width: 640px) {
   .bt-cmds { flex-direction: column; align-items: stretch; }
   .bt-cmd { flex: none; max-width: none; padding: 6px 12px; }
+  .bt-pick { flex: 1 1 140px; padding: 4px 8px; column-gap: 6px; }
+  .bt-pick-moves { display: none; }
 }
+
+/* ---------------- 家全体の地図（data.js の house。2-7・4-3・4-5） ---------------- */
+/*  見えていない部屋は、白い霧の中。部屋が増えると、地図が広がる（engine.js が大きさを合わせる） */
+.house-box { position: absolute; top: 0; left: 0; right: 0; bottom: var(--layer-h, 0px); }
+.hm-view {
+  position: absolute;
+  inset: 8px 10px;
+  overflow: hidden;
+  border-radius: 14px;
+  background: radial-gradient(ellipse at 50% 40%, #fbfcfe, #e3e9f2 70%, #d3dbe7);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, .35), inset 0 0 40px rgba(255, 255, 255, .6);
+  cursor: auto;
+}
+.hm-view.fade-in { animation: appear .8s ease-out both; }
+/* ただよう霧 */
+.hm-mist {
+  position: absolute;
+  inset: -20%;
+  pointer-events: none;
+  background-image:
+    radial-gradient(ellipse 30% 18% at 20% 30%, rgba(255, 255, 255, .9), transparent 70%),
+    radial-gradient(ellipse 26% 16% at 70% 65%, rgba(255, 255, 255, .85), transparent 70%),
+    radial-gradient(ellipse 22% 14% at 45% 85%, rgba(255, 255, 255, .8), transparent 70%),
+    radial-gradient(ellipse 28% 15% at 85% 20%, rgba(255, 255, 255, .8), transparent 70%);
+  animation: hm-drift 26s ease-in-out infinite alternate;
+  opacity: .7;
+}
+.hm-view.fog .hm-mist { opacity: 1; animation-duration: 14s; }
+@keyframes hm-drift { from { transform: translateX(-6%); } to { transform: translateX(6%); } }
+.hm-board { position: absolute; left: 0; top: 0; transform-origin: 0 0; transition: transform 1.6s ease-in-out; }
+.hm-board.no-anim, .hm-board.no-anim * { transition: none !important; }
+/* 部屋：夢の見た目（nature）と本当の家具（home）を重ねておき、切りかえる */
+.hm-room { position: absolute; transition: opacity 1.2s ease, transform 1.2s ease; }
+.hm-room.hidden { opacity: 0; transform: scale(.94); pointer-events: none; }
+.hm-look {
+  position: absolute;
+  inset: 0;
+  border: calc(var(--cell) * .09) solid #6d5a48;
+  background: #efe4cf;
+  transition: opacity 1.4s ease;
+}
+.hm-room .hm-look.home { opacity: 0; }
+.hm-room.home .hm-look.home { opacity: 1; }
+.hm-room.home .hm-look.nature { opacity: 0; }
+/* 床（house.js の floor） */
+.hm-look.hf-wood { background: repeating-linear-gradient(90deg, #e4c9a0 0 calc(var(--cell) * .5), #dcbf93 0 calc(var(--cell) * 1)); }
+.hm-look.hf-tatami { background: repeating-linear-gradient(0deg, #d9dca0 0 calc(var(--cell) * .9), #c9cd8c 0 calc(var(--cell) * 1)); }
+.hm-look.hf-balcony { background: repeating-linear-gradient(90deg, #cfd3d8 0 calc(var(--cell) * .45), #c1c6cc 0 calc(var(--cell) * .5)); }
+.hm-look.hf-tile {
+  background-color: #e7eef3;
+  background-image: linear-gradient(rgba(120, 140, 160, .25) 1px, transparent 1px), linear-gradient(90deg, rgba(120, 140, 160, .25) 1px, transparent 1px);
+  background-size: calc(var(--cell) * .5) calc(var(--cell) * .5);
+}
+.hm-look.hf-closet { background: repeating-linear-gradient(45deg, #d8cdb8 0 4px, #cfc3ac 4px 8px); }
+.hm-look.hf-room { background: #f2e6cf; }
+.hm-look.hf-flowers {
+  background-color: #a9d88c;
+  background-image:
+    radial-gradient(circle at 24% 30%, #fff 0 4%, transparent 5%),
+    radial-gradient(circle at 70% 68%, #ffc1df 0 5%, transparent 6%),
+    radial-gradient(circle at 66% 22%, #fff19a 0 4%, transparent 5%);
+  background-size: var(--cell) var(--cell);
+}
+.hm-look.hf-ice { background: linear-gradient(135deg, #e6f7fe, #bfe4f5 60%, #d6f0fb); }
+.hm-look.hf-grass { background: radial-gradient(circle at 40% 40%, #9fd07f, #84bd68 75%); }
+.hm-look.hf-trail { background: radial-gradient(circle at 30% 40%, #e3cfa6, #d2b98a 70%); }
+.hm-look.hf-light { background: radial-gradient(circle at 50% 45%, #fffdf6, #efe6ff 75%); }
+/* かべ（house.js の wall） */
+.hm-look.hw-hedge { border-color: #3e7a40; }
+.hm-look.hw-icewall { border-color: #6fa9cf; }
+.hm-look.hw-trees { border-color: #2b5a33; }
+.hm-look.hw-rock { border-color: #8a7cb2; }
+/* 家具 */
+.hm-item {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border: 1px solid rgba(60, 40, 20, .3);
+  border-radius: calc(var(--cell) * .18);
+  background: var(--c);
+  color: #3a2f28;
+  line-height: 1;
+}
+.hm-icon { font-size: calc(var(--cell) * .5); }
+.hm-label { margin-top: 1px; font-size: calc(var(--cell) * .24); font-weight: 700; white-space: nowrap; }
+.hm-item.tall .hm-label { writing-mode: vertical-rl; }
+.hm-item.small .hm-icon { font-size: calc(var(--cell) * .38); }
+.hm-item.look-stump { border-radius: 46%; background: repeating-radial-gradient(ellipse, #dcb27a 0 7%, #b98a51 7% 10%); }
+.hm-item.look-fog { border: 0; background: radial-gradient(ellipse, rgba(255, 255, 255, .95), rgba(236, 241, 248, .85) 75%); }
+/* 部屋の外（room.js の wall: true）は、霧が見えるようにくりぬく */
+.hm-outside { position: absolute; background: #e3e9f2; }
+/* 出入口と窓（house.js の edges の kind） */
+.hm-edge { position: absolute; background: #c8a07c; }
+.hm-edge.top { top: calc(var(--cell) * -.09); height: calc(var(--cell) * .09); }
+.hm-edge.bottom { bottom: calc(var(--cell) * -.09); height: calc(var(--cell) * .09); }
+.hm-edge.left { left: calc(var(--cell) * -.09); width: calc(var(--cell) * .09); }
+.hm-edge.right { right: calc(var(--cell) * -.09); width: calc(var(--cell) * .09); }
+.hm-edge.k-window { background: #9fd3f5; }
+.hm-edge.k-sliding { background: #efe0c0; }
+.hm-edge.k-closet { background: #b9ab92; }
+.hm-edge.k-open, .hm-edge.k-cave, .hm-edge.k-light { background: #fffbe6; }
+.hm-edge.k-sun { background: #ffd96b; }
+.hm-edge.k-gate { background: #b07f4f; }
+.hm-edge.k-icedoor { background: #e3f6ff; }
+.hm-edge.k-thicket { background: #5c8a46; }
+.hm-edge.k-fog { background: #f3f6fa; }
+/* 部屋の名前 */
+.hm-name {
+  position: absolute;
+  left: 50%;
+  top: calc(var(--cell) * .1);
+  transform: translateX(-50%);
+  padding: 0 calc(var(--cell) * .2);
+  border-radius: 999px;
+  background: rgba(45, 42, 50, .72);
+  color: #fff;
+  font-size: calc(var(--cell) * .3);
+  font-weight: 700;
+  line-height: 1.5;
+  white-space: nowrap;
+  pointer-events: none;
+}
+/* 会った仲間の印・夢の部屋に集まる仲間 */
+.hm-mark, .hm-token {
+  position: absolute;
+  width: calc(var(--cell) * .95);
+  height: calc(var(--cell) * .95);
+  transform: translate(-50%, -50%) scale(0);
+  opacity: 0;
+  transition: transform .5s cubic-bezier(.3, 1.6, .5, 1), opacity .3s;
+  transition-delay: calc(var(--i, 0) * .25s);
+  pointer-events: none;
+}
+.hm-mark.on, .hm-token { transform: translate(-50%, -50%) scale(1); opacity: 1; }
+.hm-mark-face {
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: calc(var(--cell) * .55);
+  line-height: 1;
+  background: radial-gradient(circle at 32% 28%, rgba(255, 255, 255, .7), transparent 55%), var(--c, #ccc);
+  box-shadow: 0 0 0 2px #fff, 0 0 12px 4px rgba(255, 236, 150, .9);
+  animation: bob 3.2s ease-in-out infinite;
+}
+.hm-token { width: calc(var(--cell) * 1.15); height: calc(var(--cell) * 1.15); }
+.hm-token.pop { animation: hm-pop .7s ease-out both; }
+@keyframes hm-pop {
+  0% { transform: translate(-50%, -50%) scale(0); filter: brightness(2.2); }
+  60% { transform: translate(-50%, -50%) scale(1.3); }
+  100% { transform: translate(-50%, -50%) scale(1); filter: none; }
+}
+/* 夢の部屋に、光が集まる（4-3） */
+.hm-light { position: absolute; width: 0; height: 0; pointer-events: none; opacity: 0; transition: opacity .6s; }
+.hm-light.on { opacity: 1; }
+.hm-light::before {
+  content: "";
+  position: absolute;
+  left: calc(var(--cell) * -2.2);
+  top: calc(var(--cell) * -1.6);
+  width: calc(var(--cell) * 4.4);
+  height: calc(var(--cell) * 3.2);
+  border-radius: 50%;
+  background: radial-gradient(ellipse, rgba(255, 246, 200, .95), rgba(255, 230, 140, .4) 45%, transparent 70%);
+  animation: hm-glow 2.4s ease-in-out infinite;
+}
+.hm-light i {
+  position: absolute;
+  width: calc(var(--cell) * .22);
+  height: calc(var(--cell) * .22);
+  margin: calc(var(--cell) * -.11);
+  border-radius: 50%;
+  background: #fff6c8;
+  box-shadow: 0 0 8px 3px rgba(255, 230, 140, .95);
+  transform: rotate(var(--a)) translateX(calc(var(--cell) * 4));
+}
+.hm-light.on i { animation: hm-gather 2.2s ease-in infinite; animation-delay: var(--d); }
+@keyframes hm-gather {
+  0% { transform: rotate(var(--a)) translateX(calc(var(--cell) * 4)); opacity: 0; }
+  20% { opacity: 1; }
+  100% { transform: rotate(var(--a)) translateX(0); opacity: 0; }
+}
+@keyframes hm-glow { 0%, 100% { opacity: .75; transform: scale(.92); } 50% { opacity: 1; transform: scale(1.08); } }
+/* プレゼントの星（4-5） */
+.hm-star {
+  position: absolute;
+  width: calc(var(--cell) * 1.4);
+  height: calc(var(--cell) * 1.4);
+  display: grid;
+  place-items: center;
+  transform: translate(-50%, -50%) scale(0);
+  opacity: 0;
+  transition: transform .8s cubic-bezier(.3, 1.6, .5, 1), opacity .4s;
+  pointer-events: none;
+}
+.hm-star.on { transform: translate(-50%, -50%) scale(1); opacity: 1; }
+.hm-star-icon {
+  font-size: calc(var(--cell) * 1.15);
+  line-height: 1;
+  color: #ffd23f;
+  text-shadow: 0 0 6px #fff, 0 0 14px rgba(255, 210, 63, .95), 0 0 28px rgba(255, 180, 40, .8);
+  animation: hm-twinkle 1.3s ease-in-out infinite;
+}
+.hm-star-temp {
+  position: absolute;
+  right: calc(var(--cell) * -.1);
+  top: calc(var(--cell) * -.1);
+  padding: 0 4px;
+  border-radius: 6px;
+  background: var(--red);
+  color: #fff;
+  font-size: calc(var(--cell) * .28);
+  font-weight: 700;
+  line-height: 1.4;
+}
+@keyframes hm-twinkle { 0%, 100% { transform: scale(.9) rotate(-6deg); } 50% { transform: scale(1.15) rotate(6deg); } }
+/* メニュー・終わりの画面の「家の地図」 */
+.house-panel { width: min(760px, 100%); }
+.map-box.house-map { position: relative; height: min(52vh, 380px); }
+.map-box.house-map .hm-view { inset: 0; }
 
 /* ---------------- PCだけで使うイラスト（data.js の SETTINGS.pcArt） ---------------- */
 /*  pc-images フォルダの画像が見つかったときは、絵文字の代わりに画像を丸の中に出す */
@@ -1471,6 +1803,9 @@ button { font: inherit; color: inherit; touch-action: manipulation; }
 .debug-out { font-size: 14px; user-select: all; -webkit-user-select: all; }
 .debug-local { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; width: 100%; }
 .debug-local span { min-width: 15em; font-size: 13px; }
+.debug-house { position: relative; width: 100%; height: 300px; cursor: crosshair; }
+.debug-house .hm-view { inset: 0; }
+.debug-present { flex-direction: column; align-items: stretch; }
 .debug-error { color: #a1122b; }
 .debug-warn { color: #8a5a00; }
 
