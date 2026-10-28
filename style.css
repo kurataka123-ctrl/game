@@ -489,8 +489,10 @@ button { font: inherit; color: inherit; touch-action: manipulation; }
   transition: transform .15s, box-shadow .15s;
 }
 .room-item:disabled { cursor: inherit; pointer-events: none; color: #3a2f28; }
-.room.interactive .room-item:hover { transform: scale(1.04); box-shadow: 0 4px 12px rgba(0, 0, 0, .25); z-index: 2; }
-.room-item.picked { outline: 3px solid #ff8a3d; outline-offset: 1px; z-index: 2; }
+/* マウスを乗せた家具・調べた家具でも、重なりの順（z-index）は変えない。
+   変えると、机の上の光る場所のように、家具に重ねた物が下に隠れて押せなくなる */
+.room.interactive .room-item:hover { transform: scale(1.04); box-shadow: 0 4px 12px rgba(0, 0, 0, .25); }
+.room-item.picked { outline: 3px solid #ff8a3d; outline-offset: 1px; }
 .room-icon { font-size: clamp(16px, 3.6cqw, 30px); line-height: 1; }
 .room-label { font-weight: 700; word-break: break-all; }
 .room-item.wide { flex-direction: row; gap: 2px; }
