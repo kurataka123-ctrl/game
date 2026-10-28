@@ -635,7 +635,7 @@
       setLayer(box);
     },
 
-    input(spec, onSubmit, onHint, onSkip) {
+    input(spec, onSubmit, onHint, onSkip, onBack) {
       novel.mark.hidden = true;
       const field = inputField(spec, "text-input", "done");
       const form = el("form", {
@@ -653,6 +653,10 @@
         el("div", { class: "input-prompt", text: fill(spec.prompt || T("inputPrompt")) }),
         field,
         el("div", { class: "input-buttons" },
+          onBack ? el("button", {
+            type: "button", class: "btn ghost input-back", text: T("inputBack"),
+            onclick: () => { setLayer(null); onBack(); },
+          }) : null,
           onSkip ? el("button", {
             type: "button", class: "btn ghost", text: fill(spec.skip.text || T("skip")),
             onclick: () => { setLayer(null); onSkip(); },
@@ -773,6 +777,7 @@
           onclick: () => { finish(); onSkip(); },
         }));
       };
+      showSkip();   // skip の after が 0 なら、はじめから出す
       const reset = () => {
         if (busy || done) return;
         pos = { x: ice.start.x, y: ice.start.y };
@@ -2395,7 +2400,7 @@
       scrollChat();
     },
 
-    input(spec, onSubmit, onHint, onSkip) {
+    input(spec, onSubmit, onHint, onSkip, onBack) {
       const field = inputField(spec, "chat-text", "send");
       const form = el("form", {
         class: "chat-form",
@@ -2414,7 +2419,14 @@
       chat.foot.replaceChildren(...[
         spec.prompt ? el("div", { class: "foot-prompt", text: fill(spec.prompt) }) : null,
         form,
-        onHint || onSkip ? el("div", { class: "foot-links" },
+        onHint || onSkip || onBack ? el("div", { class: "foot-links" },
+          onBack ? el("button", {
+            type: "button", class: "hint-btn", text: T("inputBack"),
+            onclick: () => {
+              chat.foot.replaceChildren();
+              onBack();
+            },
+          }) : null,
           onHint ? el("button", {
             type: "button", class: "hint-btn", text: T("chatHint"),
             onclick: () => {
@@ -2577,13 +2589,16 @@
   function askInput(sc, view, misses = 0, hints = 0) {
     const spec = sc.input;
     const hintList = toArray(spec.hint);
-    const onHint = hintList.length
+    // hintAfter：まちがえた回数がこの数になるまで、ヒントのボタンを出さない（書かなければ、はじめから出す）
+    const onHint = hintList.length && misses >= (Number(spec.hintAfter) || 0)
       ? () => view.say(toArray(hintList[Math.min(hints, hintList.length - 1)]), () => askInput(sc, view, misses, hints + 1), false)
       : null;
     const skip = spec.skip && spec.skip.next ? spec.skip : null;
     const onSkip = skip && misses >= (skip.after == null ? 2 : skip.after)
       ? () => view.say(toArray(skip.reply), () => runScene(skip.next), true)
       : null;
+    // back：「もどる」ボタンで、その場面へもどる（選択肢を選び直せるように）
+    const onBack = spec.back ? () => runScene(spec.back) : null;
     view.input(spec, (text) => {
       // name: true → 入力した文字を、主人公の名前として記録する（正解・不正解はない）
       if (spec.name) {
@@ -2595,7 +2610,7 @@
       } else {
         view.say(toArray(spec.wrong || T("wrong")), () => askInput(sc, view, misses + 1, hints), false);
       }
-    }, onHint, onSkip);
+    }, onHint, onSkip, onBack);
   }
 
   function applyMeet(sc) {
@@ -2864,7 +2879,7 @@
     "resume", "newGame", "keywordButton", "confirmNew", "cancel",
     "keywordTitle", "keywordNote", "keywordPlaceholder", "keywordSubmit", "keywordOk", "keywordWrong",
     "keywordEmpty", "keywordReceived", "keywordResume", "keywordStart", "back",
-    "inputPrompt", "inputPlaceholder", "namePlaceholder", "submit", "send", "hint", "chatHint", "chatHintSay",
+    "inputPrompt", "inputPlaceholder", "namePlaceholder", "submit", "send", "hint", "chatHint", "chatHintSay", "inputBack",
     "skip", "wrong", "next", "draft", "chatTitle",
     "wordGet", "wordFrom", "wordGetChat", "wordNote", "ok", "metToast",
     "partyTitle", "partyNote", "partyNoteMet", "partyNoteAll", "close",
@@ -2980,6 +2995,8 @@
         checkLines(inp.wrong, `${at} の input の wrong`);
         checkLines(inp.correct, `${at} の input の correct`);
         toArray(inp.hint).forEach((h) => checkLines(h, `${at} の input の hint`));
+        if (inp.hintAfter != null && !(Number(inp.hintAfter) >= 0)) errors.push(`${at} の input の hintAfter は、0 以上の数にしてください。`);
+        check(inp.back, `${at} の input の back`);
         if (inp.skip) {
           if (!inp.skip.next) errors.push(`${at} の skip に next（行き先）がありません。`);
           check(inp.skip.next, `${at} の skip`);

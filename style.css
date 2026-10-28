@@ -424,6 +424,7 @@ button { font: inherit; color: inherit; touch-action: manipulation; }
 .input-prompt { font-weight: 700; }
 .input-buttons { display: flex; flex-wrap: wrap; gap: 10px; justify-content: flex-end; }
 .input-panel .btn.ghost { border-color: transparent; background: transparent; color: var(--ink-soft); }
+.input-buttons .input-back { margin-right: auto; padding-left: 4px; padding-right: 4px; }   /* 「もどる」は左はしに出す */
 
 .draft-badge {
   position: absolute;
