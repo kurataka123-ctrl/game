@@ -4,7 +4,7 @@
    ふだんは編集しなくて大丈夫です。
      ・会話、選択肢、合言葉、カード、画面の文字を変える → data.js
      ・夢の部屋の地図を変える                         → room.js
-     ・第1部で歩く地図（家の部屋の形）を変える → house.js
+     ・第1部で歩く地図・2-7 の家全体の地図を変える → house.js
      ・1-3 の戦いの技・数値・セリフを変える      → data.js（BATTLES・MOVES）
    ※ このファイルには文章を書きません。画面に出る文章は data.js にまとめます。
    ================================================================ */
@@ -175,6 +175,9 @@
     if (c && c.name) nameToId[c.name] = id;
   }
 
+  // 演出の行か：{ house: … }（2-7 の地図が広がる演出など。文は出さない）
+  const isEffect = (ln) => Boolean(ln) && typeof ln === "object" && ln.house !== undefined;
+
   // "イーブイ：こんにちは" → { who: "eevee", text: "こんにちは" }
   // { if: "indoor", text: "イーブイ：…" } のような条件つきの行も、同じように読む
   function parseLine(line) {
@@ -287,9 +290,16 @@
     },
   };
   const localValues = localStore.load();
+  // 入れていないときは default の呼び名（"~" で始まるときは「表示用に隠す」形なので、元にもどす）
+  const localDefault = (key) => unhide((LOCAL[key] && LOCAL[key].default) || "");
   function localText(key) {
     const v = String(localValues[key] == null ? "" : localValues[key]).trim();
-    return v || String((LOCAL[key] && LOCAL[key].default) || "");
+    return v || localDefault(key);
+  }
+  // プレゼントの場所（4-5。家全体の地図のマス {x, y}）。遊ぶ前に、このPCで決めておく（🛠 →「遊ぶ前の準備」）
+  function presentAt() {
+    const m = String(localValues.presentAt || "").match(/^(\d+),(\d+)$/);
+    return m ? { x: Number(m[1]), y: Number(m[2]) } : null;
   }
 
   // name：主人公の名前 / flags：set で記録した条件 / atEnd：章の終わりの画面にいる
@@ -351,15 +361,16 @@
     const gridBox = el("div", { class: "grid-box", hidden: true });   // 氷の床・歩けるマップ
     const puzzleBox = el("div", { class: "puzzle-box", hidden: true });
     const battleBox = el("div", { class: "battle-box", hidden: true }); // 戦い
+    const houseBox = el("div", { class: "house-box", hidden: true });   // 家全体の地図
     const layer = el("div", { class: "stage-layer" });
     const draft = el("div", { class: "draft-badge", text: T("draft"), hidden: true });
-    const stage = el("div", { class: "stage" }, chars, roomBox, gridBox, puzzleBox, battleBox, layer, draft);
+    const stage = el("div", { class: "stage" }, chars, roomBox, gridBox, puzzleBox, battleBox, houseBox, layer, draft);
     const name = el("div", { class: "nameplate", hidden: true });
     const text = el("div", { class: "text" });
     const mark = el("div", { class: "next-mark", text: "▼", hidden: true, "aria-hidden": "true" });
     const box = el("div", { class: "textbox", tabindex: "0" }, name, text, mark);
     const root = el("section", { class: "screen novel" }, topbar, stage, box);
-    return { root, chapter, partyBtn, chars, roomBox, gridBox, puzzleBox, battleBox, layer, draft, stage, name, text, mark, box };
+    return { root, chapter, partyBtn, chars, roomBox, gridBox, puzzleBox, battleBox, houseBox, layer, draft, stage, name, text, mark, box };
   }
 
   // 文字を1文字ずつ表示する
@@ -390,7 +401,8 @@
   }
 
   // auto：話し手のいない行を、自動で次へ進めるまでの時間（戦いの文）。onLine：行を出すたびに呼ぶ
-  const NV = { lines: [], idx: 0, then: null, hold: true, typer: null, mode: "idle", shown: [], auto: 0, onLine: null, autoTimer: null };
+  // exploreNext：地図を調べ終えたあと、先へ進む関数 / house：家全体の地図（2-7・4-3・4-5）
+  const NV = { lines: [], idx: 0, then: null, hold: true, typer: null, mode: "idle", shown: [], auto: 0, onLine: null, autoTimer: null, exploreNext: null, house: null };
 
   // 選択肢・入力欄などを表示する（null で消す）
   // 表示中はキャラクターを上によせて、重ならないようにする
@@ -398,8 +410,9 @@
     if (node) novel.layer.replaceChildren(node);
     else novel.layer.replaceChildren();
     novel.stage.classList.toggle("has-layer", Boolean(node) && !node.classList.contains("room-done"));
-    // 最後の謎の枠が、入力欄に隠れないように、入力欄の高さを伝える
+    // 最後の謎の枠・家の地図が、入力欄に隠れないように、入力欄の高さを伝える
     novel.stage.style.setProperty("--layer-h", node ? `${novel.layer.offsetHeight}px` : "0px");
+    if (NV.house) NV.house.fit(true);
   }
 
   function charNode(id, i) {
@@ -416,11 +429,14 @@
     novel.chars.replaceChildren(...NV.shown.map(charNode));
   }
 
-  // 地図・氷の床・歩けるマップ・最後の謎の枠・戦いを表示しているか（そのときはキャラクターを出さない）
-  const stageBusy = () => !novel.roomBox.hidden || !novel.gridBox.hidden || !novel.puzzleBox.hidden || !novel.battleBox.hidden;
+  // 地図・氷の床・歩けるマップ・最後の謎の枠・戦い・家の地図を表示しているか（そのときはキャラクターを出さない）
+  const stageBusy = () => !novel.roomBox.hidden || !novel.gridBox.hidden || !novel.puzzleBox.hidden
+    || !novel.battleBox.hidden || !novel.houseBox.hidden;
 
   function setSpeaker(who) {
     const c = who ? CHARS[who] : null;
+    // 家の地図で appear のとき：話した仲間が、地図の上に現れる（4-3）
+    if (c && NV.house) NV.house.appear(who);
     novel.name.hidden = !c || !c.name;
     if (c) {
       novel.name.textContent = who === "hero" ? fill("{name}") : charName(c);
@@ -438,10 +454,26 @@
     }
   }
 
+  // 演出の行（data.js の { house: … }）を行う。文は出さない
+  function runEffect(fx) {
+    if (fx.house !== undefined) showHouse(fx.house, true);
+  }
+
   function nvShow(i) {
+    // 演出の行は、すぐに行って次の行へ
+    while (i < NV.lines.length && NV.lines[i].effect) {
+      runEffect(NV.lines[i].effect);
+      i += 1;
+    }
+    if (i >= NV.lines.length) {
+      finishSay();
+      return;
+    }
     NV.idx = i;
     const ln = NV.lines[i];
-    const last = i === NV.lines.length - 1;
+    // 文のある行が、もう残っていなければ最後の行（うしろの演出は、ここで行う）
+    const last = !NV.lines.slice(i + 1).some((l) => !l.effect);
+    if (last) for (const l of NV.lines.slice(i + 1)) runEffect(l.effect);
     const token = gen;
     const lines = NV.lines;
     let doneNow = false;
@@ -478,12 +510,15 @@
   }
 
   // クリック（タップ）で次へ
-  function nvAdvance() {
+  //   from："stage"（絵のところ）/ "box"（会話の枠）/ "key"（Enter・スペース）
+  function nvAdvance(from) {
     if (currentView !== "novel") return;
     if (NV.mode === "explore" && NV.typer) { NV.typer.skip(); return; }
+    // 地図を調べ終えたあとは、会話の枠（または Enter）でも先へ進める（絵のところは、調べまちがいがあるので進まない）
+    if (NV.mode === "explore" && NV.exploreNext && from !== "stage") { NV.exploreNext(); return; }
     if (NV.mode !== "talk") return;
     if (NV.typer) { NV.typer.skip(); return; }
-    if (NV.idx < NV.lines.length - 1) nvShow(NV.idx + 1);
+    if (NV.lines.slice(NV.idx + 1).some((l) => !l.effect)) nvShow(NV.idx + 1);
     else finishSay();
   }
 
@@ -500,6 +535,9 @@
       NV.dark = sc.room === "dark";
       NV.grid = null;
       NV.battle = null;
+      NV.exploreNext = null;
+      if (NV.house) NV.house.stop();
+      NV.house = null;
       GRID.key = null;
       novel.gridBox.hidden = true;
       novel.gridBox.replaceChildren();
@@ -507,19 +545,29 @@
       novel.puzzleBox.replaceChildren();
       novel.battleBox.hidden = true;
       novel.battleBox.replaceChildren();
+      novel.houseBox.hidden = true;
+      novel.houseBox.replaceChildren();
+      novel.stage.classList.remove("walk-mode", "house-mode");
       const prevCrowd = NV.crowd || "";
       NV.crowd = "";
       novel.chars.classList.remove("crowd", "settled");
       if (sc.battle) {
-        // 戦い（data.js の BATTLES）
+        // 戦い（data.js の BATTLES）。仲間をえらぶ戦いでは、えらぶまで主人公だけを並べる
         novel.chars.replaceChildren();
         NV.shown = [];
         novel.roomBox.hidden = true;
         novel.roomBox.replaceChildren();
         novel.battleBox.hidden = false;
         const b = battleOf(sc.battle);
-        if (b) NV.battle = renderBattle(novel.battleBox, b);
+        if (b) NV.battle = renderBattle(novel.battleBox, battleNeedsPick(b) ? battleOf(sc.battle, flagOn, []) : b);
         else novel.battleBox.replaceChildren(el("div", { class: "room-missing", text: `data.js の BATTLES に「${sc.battle}」がありません。` }));
+      } else if (sc.house) {
+        // 家全体の地図（house.js）。地図の変化は、lines の { house: … } で行う
+        novel.chars.replaceChildren();
+        NV.shown = [];
+        novel.roomBox.hidden = true;
+        novel.roomBox.replaceChildren();
+        showHouse(sc.house, false);
       } else if (sc.ice || sc.walk) {
         // 氷の床のパズル・歩けるマップ（house.js の地図）
         novel.chars.replaceChildren();
@@ -562,7 +610,7 @@
     // opts.auto：話し手のいない行を、自動で次へ進めるまでの時間 / opts.onLine(i)：i 行目を出すときに呼ぶ
     say(lines, then, hold = true, opts) {
       clearTimeout(NV.autoTimer);
-      NV.lines = toArray(lines).filter(visible).map(parseLine);
+      NV.lines = toArray(lines).filter(visible).map((ln) => (isEffect(ln) ? { effect: ln } : parseLine(ln)));
       NV.then = then;
       NV.hold = hold;
       NV.auto = (opts && opts.auto) || 0;
@@ -633,29 +681,40 @@
     },
 
     // 地図を調べる
+    //   光る場所を調べると、先へ進むボタンが出る。会話の枠のクリック・Enter・光る場所をもう一度押しても進む
     explore(sc, onDone) {
       NV.mode = "explore";
       novel.mark.hidden = true;
       setSpeaker(null);
       const dark = NV.dark;
+      const token = gen;
       novel.text.textContent = fill(sc.exploreText || (RM && RM.exploreText) || T("explore"));
       const needFind = Boolean(RM) && RM.requireFind !== false && (RM.items || []).some((it) => it.shine);
       let found = !needFind;
+      let shineSeen = false;   // 光る場所を、一度調べたか
+      const proceed = () => {
+        if (token !== gen || NV.mode !== "explore") return;
+        if (NV.typer) { NV.typer.cancel(); NV.typer = null; }
+        NV.mode = "idle";
+        NV.exploreNext = null;
+        setLayer(null);
+        renderRoom(novel.roomBox, null, dark);
+        onDone();
+      };
       const showDone = () => {
+        NV.exploreNext = proceed;
         if (novel.layer.querySelector(".room-done")) return;
         setLayer(el("button", {
           class: "btn primary room-done", type: "button", text: sc.roomDone || T("roomDone"),
           onclick: (e) => {
             e.stopPropagation();
-            if (NV.typer) { NV.typer.cancel(); NV.typer = null; }
-            NV.mode = "idle";
-            setLayer(null);
-            renderRoom(novel.roomBox, null, dark);
-            onDone();
+            proceed();
           },
         }));
       };
       renderRoom(novel.roomBox, (item) => {
+        if (item.shine && shineSeen && found) { proceed(); return; }
+        if (item.shine) shineSeen = true;
         if (NV.typer) NV.typer.cancel();
         let doneNow = false;
         // 暗い部屋では、家具の名前がはっきりしない文章にする
@@ -771,8 +830,9 @@
       const pos = Object.assign({}, NV.walkPos);
       let busy = false;
       view.board.classList.add("walking");
+      novel.stage.classList.add("walk-mode");   // 選択肢を、地図にかからない場所に出す
 
-      const events = () => toArray(sc.events).filter((ev) => ev && typeof ev === "object" && visible(ev));
+      const events = () => toArray(sc.events).filter((ev) => eventOn(sc, ev));
       // そのマスにいる人物・調べられる場所（同じマスに何個も書いたときは、条件に合う最初のもの）
       const eventAt = (x, y) => events().find((ev) => !ev.door && eventCells(ev).some((p) => p.x === x && p.y === y)) || null;
       const doorEvent = (id) => events().find((ev) => ev.door === id) || null;
@@ -809,7 +869,7 @@
       // 集まった仲間（data.js の team）を、画面の横に出す
       const team = el("div", { class: "grid-team", hidden: !sc.team });
       const showTeam = () => {
-        const ids = toArray(sc.team).filter((t) => t && visible(t)).flatMap((t) => toArray(t.who)).filter((id) => CHARS[id]);
+        const ids = teamIds(sc);
         team.replaceChildren(
           el("div", { class: "grid-team-title", text: T("walkTeam") }),
           el("div", { class: "grid-team-list" },
@@ -828,18 +888,33 @@
         novel.text.textContent = helpText();
         markFront();
       };
-      // 出来事：セリフ（say）を出してから、条件を記録（set）し、次の場面（next）へ
+      // 出来事：セリフ（say）を出してから、条件を記録（set）し、選択肢（choices）か、次の場面（next）へ
       const act = (ev) => {
         save();
         NV.mode = "talk";
         view.setFront(null);
+        const choices = toArray(ev.choices).filter(visible);
         NovelView.say(toArray(ev.say), () => {
           if (token !== gen) return;
           setFlags(ev);
           storage.save(state);
-          if (ev.next) runScene(ev.next);
+          if (choices.length) ask(choices);
+          else if (ev.next) runScene(ev.next);
           else resume();
-        }, true);
+        }, !choices.length);
+      };
+      // 選択肢：選んだものの返事（reply）を出して、条件を記録（set）し、next があればその場面へ。なければ歩くのにもどる
+      const ask = (choices) => {
+        NovelView.choices(choices, (c) => {
+          if (token !== gen) return;
+          setFlags(c);
+          storage.save(state);
+          NovelView.say(toArray(c.reply), () => {
+            if (token !== gen) return;
+            if (c.next) runScene(c.next);
+            else resume();
+          }, true);
+        });
       };
       // 家具やかべを調べたときの文章
       const tell = (text) => {
@@ -943,60 +1018,165 @@
       resume();
     },
 
-    // 戦い：コマンドを選ぶ → 1ターン分の出来事を順に見せる → 勝つまでくり返す
-    //   負けたら、ヒント（lose）を出して、その戦いの最初からやり直す
+    // 戦い：（仲間をえらぶ →）戦う仲間それぞれのコマンドを選ぶ → 1ターン分の出来事を順に見せる → 勝つまでくり返す
+    //   負けたら、ヒント（lose）を出して、その戦いの最初からやり直す（仲間も、えらび直せる）
     battle(sc, onWin) {
-      const b = battleOf(sc.battle);
-      const ui = NV.battle;
-      if (!b || !ui) return;
+      const def = BT[sc.battle];
+      if (!def || !NV.battle || !battleOf(sc.battle)) return;
       const token = gen;
-      const def = b.def;
-      let st = battleStart(b);
+      const alive = () => token === gen;
       let losses = 0;
+      let hitSaid = false;   // 相手に初めて当たったときのセリフ（hitSay）を出したか。やり直しても2回目からは出さない
+      let pick = null;       // えらんだ仲間（leader 以外）。えらばない戦いでは null
+      let b = null;
+      let ui = NV.battle;
+      let st = null;
       const play = (steps, then) => {
         NovelView.say(steps.map((s) => s.text), then, true, {
           auto: Math.max(0, Number(S.battleAuto) || 0),
-          onLine: (i) => { if (token === gen) ui.show(steps[i]); },
+          onLine: (i) => { if (alive()) ui.show(steps[i]); },
         });
       };
-      // コマンドを選ぶ（数字のキーと矢印キーでも選べる）
-      const menu = () => {
-        if (token !== gen) return;
+      // あきらめるボタン（skip.after 回負けると出す）
+      const skipButton = () => {
+        const skip = def.skip && def.skip.next && losses >= (def.skip.after == null ? 2 : def.skip.after) ? def.skip : null;
+        return skip ? el("button", {
+          type: "button", class: "btn ghost bt-skip", text: fill(skip.text || T("battleSkip")),
+          onclick: (e) => {
+            e.stopPropagation();
+            GRID.key = null;
+            ui.menu.replaceChildren();
+            NovelView.say(toArray(skip.reply), () => runScene(skip.next), true);
+          },
+        }) : null;
+      };
+      // 戦いを始める（仲間をえらぶ戦いなら、先にえらぶ）
+      const begin = () => {
+        if (!alive()) return;
+        const base = battleOf(sc.battle);
+        if (battleNeedsPick(base)) choose(base);
+        else start(null);
+      };
+      // 仲間をえらぶ：えらべる仲間から choose 人（leader は、かならず戦う）。数字のキーでも選べる
+      const choose = (base) => {
+        // 前の戦いの残りのハートが見えないように、主人公だけの画面に描き直す
+        ui = renderBattle(novel.battleBox, battleOf(sc.battle, flagOn, []));
+        NV.battle = ui;
         NV.mode = "battle";
         setSpeaker(null);
         novel.mark.hidden = true;
-        novel.text.textContent = T("battleAsk", { who: whoName(b.leader) });
-        ui.show({ st });
-        const skip = def.skip && def.skip.next && losses >= (def.skip.after == null ? 2 : def.skip.after) ? def.skip : null;
-        const pick = (id) => {
-          GRID.key = null;
-          ui.menu.replaceChildren();
-          turn(id);
-        };
-        const buttons = b.commands.filter((id) => MV[id]).map((id, i) => el("button", {
-          type: "button", class: "bt-cmd",
+        novel.text.textContent = T("battleChoose", { n: base.choose });
+        let sel = toArray(pick).filter((id) => base.candidates.includes(id));
+        const ok = el("button", {
+          type: "button", class: "btn primary bt-pick-ok",
+          onclick: (e) => {
+            e.stopPropagation();
+            if (sel.length !== base.choose) return;
+            GRID.key = null;
+            start(sel.slice());
+          },
+        });
+        const cards = base.candidates.map((id, i) => el("button", {
+          type: "button", class: "bt-pick", "data-id": id, style: `--c:${(CHARS[id] && CHARS[id].color) || "#ccc"}`,
           onmousedown: (e) => e.preventDefault(),
-          onclick: (e) => { e.stopPropagation(); pick(id); },
+          onclick: (e) => { e.stopPropagation(); toggle(id); },
         },
           el("span", { class: "bt-cmd-key", text: String(i + 1), "aria-hidden": "true" }),
+          withArt(el("span", { class: "bt-pick-face", text: (CHARS[id] && CHARS[id].emoji) || "？" }), id),
+          el("span", { class: "bt-pick-name", text: whoName(id) }),
+          el("span", { class: "bt-pick-moves", text: battleMovesOf(def, id).map((m) => fill(MV[m].name || m)).join("・") })));
+        const update = () => {
+          for (const c of cards) c.classList.toggle("on", sel.includes(c.dataset.id));
+          ok.disabled = sel.length !== base.choose;
+          ok.textContent = sel.length === base.choose ? T("battleChooseOk") : T("battleChooseLeft", { n: base.choose - sel.length });
+        };
+        const toggle = (id) => {
+          if (sel.includes(id)) sel = sel.filter((x) => x !== id);
+          else if (sel.length < base.choose) sel.push(id);
+          update();
+        };
+        ui.root.classList.add("picking");   // えらんでいる間は、仲間の列をかくして、相手を大きく見せる
+        ui.menu.replaceChildren(
+          el("div", { class: "bt-pick-note", text: T("battleChooseNote", { leader: whoName(base.leader) }) }),
+          el("div", { class: "bt-picks" }, cards),
+          el("div", { class: "bt-menu-foot" }, ok, skipButton()));
+        update();
+        GRID.key = (e) => {
+          const n = Number(e.key);
+          if (n >= 1 && n <= cards.length) {
+            if (!e.repeat) toggle(base.candidates[n - 1]);
+            return true;
+          }
+          if (e.key === "Enter" && sel.length === base.choose) {
+            if (!e.repeat) ok.click();
+            return true;
+          }
+          return false;
+        };
+      };
+      // えらんだ仲間で、戦いの画面を作り直して始める
+      const start = (ids) => {
+        pick = ids;
+        b = battleOf(sc.battle, flagOn, ids);
+        ui = renderBattle(novel.battleBox, b);
+        NV.battle = ui;
+        st = Object.assign(battleStart(b), { hitSaid });
+        ask();
+      };
+      // ターンの始め：ヒントがあれば、ニンフィアが話してから、コマンドを選ぶ
+      const ask = () => {
+        if (!alive()) return;
+        ui.show({ st });
+        const hint = battleHintAt(b, st.turn);
+        if (hint.length) NovelView.say(hint, () => command(0, []), true);
+        else command(0, []);
+      };
+      // i 番目の仲間のコマンドを選ぶ（commands のない仲間は、さくせんで動くので、とばす）
+      //   数字のキーで選ぶ。矢印キーで選んで Enter でもよい。Backspace（または Esc）で、ひとつ前の仲間にもどる
+      const command = (i, picks) => {
+        if (!alive()) return;
+        while (i < b.members.length && !b.members[i].commands.length) { picks[i] = null; i += 1; }
+        if (i >= b.members.length) { turn(picks); return; }
+        const m = b.members[i];
+        const first = b.members.findIndex((x) => x.commands.length);
+        let back = -1;
+        for (let k = i - 1; k >= 0; k--) if (b.members[k].commands.length) { back = k; break; }
+        NV.mode = "battle";
+        setSpeaker(null);
+        novel.mark.hidden = true;
+        novel.text.textContent = T("battleAsk", { who: whoName(m.who) });
+        ui.show({ st, choosing: m.who, picks });
+        const choosePick = (id) => {
+          GRID.key = null;
+          const next = picks.slice(0, i);
+          next[i] = id;
+          command(i + 1, next);
+        };
+        const goBack = back >= 0 ? () => { GRID.key = null; command(back, picks.slice(0, back)); } : null;
+        const buttons = m.commands.map((id, k) => el("button", {
+          type: "button", class: "bt-cmd",
+          onmousedown: (e) => e.preventDefault(),
+          onclick: (e) => { e.stopPropagation(); choosePick(id); },
+        },
+          el("span", { class: "bt-cmd-key", text: String(k + 1), "aria-hidden": "true" }),
           el("span", { class: "bt-cmd-name", text: fill(MV[id].name || id) }),
           MV[id].note ? el("span", { class: "bt-cmd-note", text: fill(MV[id].note) }) : null));
-        ui.menu.replaceChildren(el("div", { class: "bt-cmds" }, buttons));
-        if (skip) {
-          ui.menu.append(el("button", {
-            type: "button", class: "btn ghost bt-skip", text: fill(skip.text || T("battleSkip")),
-            onclick: (e) => {
-              e.stopPropagation();
-              GRID.key = null;
-              ui.menu.replaceChildren();
-              NovelView.say(toArray(skip.reply), () => runScene(skip.next), true);
-            },
-          }));
-        }
+        const skip = i === first ? skipButton() : null;
+        const foot = goBack || skip ? el("div", { class: "bt-menu-foot" },
+          goBack ? el("button", {
+            type: "button", class: "btn ghost bt-back", text: T("battleBack"),
+            onclick: (e) => { e.stopPropagation(); goBack(); },
+          }) : null,
+          skip) : null;
+        ui.menu.replaceChildren(...[el("div", { class: "bt-cmds" }, buttons), foot].filter(Boolean));
         GRID.key = (e) => {
           const n = Number(e.key);
           if (n >= 1 && n <= buttons.length) {
             if (!e.repeat) buttons[n - 1].click();
+            return true;
+          }
+          if ((e.key === "Backspace" || e.key === "Escape") && goBack) {
+            if (!e.repeat) goBack();
             return true;
           }
           const dir = KEY_DIRS[e.key];
@@ -1008,20 +1188,14 @@
           return true;
         };
       };
-      // ターンの始め：ヒントがあれば、ニンフィアが話してから、コマンドを選ぶ
-      const ask = () => {
-        if (token !== gen) return;
-        ui.show({ st });
-        const hint = battleHintAt(b, st.turn);
-        if (hint.length) NovelView.say(hint, menu, true);
-        else menu();
-      };
-      const turn = (id) => {
+      const turn = (picks) => {
         NV.mode = "talk";
-        const r = battleTurn(b, st, id);
+        ui.menu.replaceChildren();
+        const r = battleTurn(b, st, picks);
         play(r.steps, () => {
-          if (token !== gen) return;
+          if (!alive()) return;
           st = r.state;
+          hitSaid = st.hitSaid;
           if (st.won) {
             onWin();
             return;
@@ -1030,18 +1204,13 @@
             losses += 1;
             const lose = toArray(def.lose);
             const hint = lose.length ? toArray(lose[Math.min(losses, lose.length) - 1]) : [];
-            NovelView.say([...hint, T("battleRetry", { n: b.hearts })], () => {
-              if (token !== gen) return;
-              st = Object.assign(battleStart(b), { hitSaid: st.hitSaid });
-              ui.show({ st, fx: "retry" });
-              ask();
-            }, true);
+            NovelView.say([...hint, T("battleRetry", { n: b.hearts })], begin, true);
             return;
           }
           ask();
         });
       };
-      ask();
+      begin();
     },
 
     proceed(cb) { cb(); },
@@ -1175,12 +1344,23 @@
     return list.map((p, i) => ({ x: Number(p[0]), y: Number(p[1]), id: ids.length ? ids[Math.min(i, ids.length - 1)] : null }));
   }
 
+  // 集まった仲間（data.js の team のうち、条件に合うもの）
+  function teamIds(sc) {
+    return toArray(sc.team).filter((t) => t && visible(t)).flatMap((t) => toArray(t.who)).filter((id) => CHARS[id]);
+  }
+
+  // 歩けるマップの出来事が、いま起きるか（if・unless と、need：集まった仲間が何人以上か）
+  function eventOn(sc, ev) {
+    if (!ev || typeof ev !== "object" || !visible(ev)) return false;
+    return ev.need == null || teamIds(sc).length >= Number(ev.need);
+  }
+
   // いま出ている人物（同じマスに何人も書いたときは、条件に合う最初の1人）
   function walkNpcs(sc) {
     const out = [];
     const used = new Set();
     for (const ev of toArray(sc.events)) {
-      if (!ev || !ev.npc || !visible(ev)) continue;
+      if (!ev || !ev.npc || !eventOn(sc, ev)) continue;
       for (const p of eventCells(ev)) {
         if (used.has(xy(p.x, p.y)) || !CHARS[p.id]) continue;
         used.add(xy(p.x, p.y));
@@ -1405,6 +1585,7 @@
 
   // ==============================================================
   // 戦い（data.js の BATTLES・MOVES。1-3 ニンフィアの花畑）
+  //   毎ターン、戦う仲間それぞれのコマンドを選ぶ。相手は actions のとおりに動く
   //   1ターン分の出来事を先に計算してから（battleTurn）、画面で1つずつ見せる
   //   数値は固定で、乱数は使わない（同じ選び方なら、いつも同じ結果になる）
   // ==============================================================
@@ -1423,44 +1604,66 @@
     });
   }
 
+  // 戦う仲間の候補（party。名前だけ書いたものも { who } にそろえる）
+  function battleParty(def) {
+    const list = toArray(def && def.party)
+      .map((p) => (typeof p === "string" ? { who: p } : p))
+      .filter((p) => p && p.who && CHARS[p.who]);
+    if (def && def.leader && CHARS[def.leader] && !list.some((p) => p.who === def.leader)) list.unshift({ who: def.leader });
+    return list;
+  }
+  // その仲間が使える技（コマンド。なければ、さくせんの技）
+  function battleMovesOf(def, id) {
+    const p = battleParty(def).find((x) => x.who === id) || {};
+    const cmds = toArray(p.commands).filter((c) => MV[c]);
+    return cmds.length ? cmds : toArray(p.tactics).map((t) => (typeof t === "string" ? t : t && t.move)).filter((m) => MV[m]);
+  }
+
   // 戦いのデータを、動く順番の一覧（members）にまとめる
-  //   on：条件の名前が入っているかを調べる関数（点検では、仲間がいる・いないの両方を調べる）
-  function battleOf(id, on = flagOn) {
+  //   on  ：条件の名前が入っているかを調べる関数（点検では、全員が仲間になったものとして調べる）
+  //   pick：えらんだ仲間（leader 以外の名前の一覧）。書かなければ、えらべる仲間の上から choose 人
+  //   choose を書いた戦いでは、party のうち条件（if）に合う人が「えらべる仲間」。
+  //   えらべる仲間が choose 人より少ないとき（テスト用メニューでとんだときなど）は、全員からえらべる
+  function battleOf(id, on = flagOn, pick = null) {
     const def = BT[id];
     if (!def || typeof def !== "object") return null;
-    const list = toArray(def.party)
-      .map((p) => (typeof p === "string" ? { who: p } : p))
-      .filter((p) => p && p.who && visibleWith(p, on));
-    // leader を party に書かなかったときは、いちばん先に動く
-    if (def.leader && !list.some((p) => p.who === def.leader)) list.unshift({ who: def.leader });
-    const members = list.map((p) => ({
+    const all = battleParty(def);
+    const choose = Math.max(0, Math.floor(Number(def.choose) || 0));
+    const others = all.filter((p) => p.who !== def.leader);
+    let can = others.filter((p) => visibleWith(p, on));
+    if (choose && can.length < choose) can = others;
+    const chosen = !choose ? can : pick ? can.filter((p) => pick.includes(p.who)) : can.slice(0, choose);
+    const members = all.filter((p) => p.who === def.leader || chosen.includes(p)).map((p) => ({
       who: p.who,
       leader: p.who === def.leader,
-      tactics: p.who === def.leader ? []
-        : toArray(p.tactics).map((t) => (typeof t === "string" ? { move: t } : t)).filter((t) => t && t.move),
+      commands: toArray(p.commands).filter((c) => MV[c]),
+      tactics: toArray(p.tactics).map((t) => (typeof t === "string" ? { move: t } : t)).filter((t) => t && t.move),
     }));
     const e = def.enemy || {};
     return {
-      id, def, members,
+      id, def, members, choose,
+      candidates: can.map((p) => p.who),
       leader: def.leader,
-      commands: toArray(def.commands),
-      hearts: Math.max(0, Number(def.hearts) || 0),
+      hearts: Math.max(1, Math.floor(Number(def.hearts) || 1)),
       foes: toArray(e.who).filter((w) => CHARS[w]),
       enemy: e,
-      max: Math.max(1, Number(e.max) || 1),
+      foeHearts: Math.max(1, Math.floor(Number(e.hearts) || 1)),
       weak: toArray(e.weak),
-      damage: Math.max(0, Number(e.damage) || 0),
-      blizzard: Math.max(0, Number(e.blizzard) || 0),
+      actions: toArray(e.actions).filter((a) => a && typeof a === "object"),
     };
   }
+  // 仲間をえらんでから戦うか（えらべる仲間が、choose 人より多いとき）
+  const battleNeedsPick = (b) => Boolean(b) && b.choose > 0 && b.candidates.length > b.choose;
+  // turn ターン目の相手の行動（actions を上から順にくり返す）
+  const battleAction = (b, turn) => (b.actions.length ? b.actions[(Math.max(1, turn) - 1) % b.actions.length] : null);
 
-  // 戦いの始め（ハートもゲージも満タン）
-  //   hitSaid：hitSay（ゲージが減ったときのセリフ）を出したか。やり直しても、2回目からは出さない
+  // 戦いの始め（ハートは満タン）
+  //   charged：力をためている仲間（名前 → 倍率）/ hitSaid：hitSay（初めて当たったときのセリフ）を出したか
   function battleStart(b) {
-    return { turn: 1, hearts: b.hearts, gauge: b.max, cheer: 0, cheerLeft: 0, won: false, lost: false, hitSaid: false };
+    return { turn: 1, hearts: b.hearts, foe: b.foeHearts, cheer: 0, cheerLeft: 0, charged: {}, won: false, lost: false, hitSaid: false };
   }
 
-  // さくせん：上から順に調べて、条件に合った最初の技（合うものがなければ、動かない）
+  // さくせん（commands のない仲間）：上から順に調べて、条件に合った最初の技（合うものがなければ、動かない）
   //   hearts: 2 → ハートが2以下のとき / cheer: false → 力アップが切れているとき（true は、力アップ中）
   function pickTactic(m, st) {
     for (const t of m.tactics) {
@@ -1472,15 +1675,24 @@
     return null;
   }
 
+  // 攻撃の技の強さ（点検で「いちばん強い攻撃」を選ぶため）
+  const attackValue = (b, id) => {
+    const mv = MV[id];
+    if (!mv || mv.kind !== "attack") return -1;
+    return (Number(mv.power) || 0) * Math.max(1, Number(mv.hits) || 1) * (b.weak.includes(mv.type) ? 2 : 1);
+  };
+
   // 1ターン分の出来事を計算する（画面には出さない）
-  //   cmd：操作するキャラが選んだ技の名前
+  //   picks：戦う仲間それぞれが選んだ技の名前（members と同じ順番。さくせんで動く仲間の分は null）
+  //   quiet：true なら文を作らない（点検で、何度も計算するため）
   //   返り値：{ state：ターンのあとの状態, steps：画面に出す文と、そのときの状態（st）・動き（fx）の一覧 }
-  function battleTurn(b, st0, cmd) {
-    const st = Object.assign({}, st0);
+  function battleTurn(b, st0, picks, quiet) {
+    const st = Object.assign({}, st0, { charged: Object.assign({}, st0.charged) });
     const e = b.enemy;
     const steps = [];
-    const snap = () => ({ turn: st.turn, hearts: st.hearts, gauge: st.gauge, cheerLeft: st.cheerLeft });
-    const vars = (extra) => Object.assign({ enemy: b.foes.length ? whoName(b.foes[0]) : "", gauge: fill(e.gauge || "") }, extra);
+    const snap = () => ({ turn: st.turn, hearts: st.hearts, foe: st.foe, cheerLeft: st.cheerLeft, charged: Object.assign({}, st.charged) });
+    const enemy = quiet || !b.foes.length ? "" : whoName(b.foes[0]);
+    const vars = (extra) => Object.assign({ enemy }, extra);
     const narration = (t) => typeof t === "string" && !parseLine(t).who;
     // 1つの動きの文を steps に入れる。最初の2つがどちらも地の文なら、1つの枠に2行で出す
     const act = (parts) => {
@@ -1499,83 +1711,103 @@
       }
     };
 
-    // 仲間の番（leader → party の上から順）
-    let boost = 0;   // てだすけの倍率（次に動く仲間に効く）
+    // 仲間の番（party の上から順）
+    let boost = 0;           // てだすけの倍率（次に動く仲間に効く）
+    let guardBig = false;    // big の行動（ふぶきなど）を防ぐ
+    let guardAll = false;    // 相手の攻撃を、すべて防ぐ
     for (let i = 0; i < b.members.length && !st.won; i++) {
       const m = b.members[i];
-      const id = m.leader ? cmd : pickTactic(m, st);
+      const id = m.commands.length ? toArray(picks)[i] : pickTactic(m, st);
       const mv = id ? MV[id] : null;
+      const charge = st.charged[m.who] || 0;
+      delete st.charged[m.who];   // ためた力は、次に動いたときに使う（攻撃でなければ消える）
       if (!mv) continue;
       const times = boost || 1;
       boost = 0;
-      const v = vars({ who: whoName(m.who), move: fill(mv.name || id) });
       const power = Math.max(0, Number(mv.power) || 0);
-      const parts = [{ text: mv.text ? btText(mv.text, v) : T("battleUse", v), st: snap(), actor: m.who, fx: mv.ribbon ? "ribbon" : "" }];
-      if (times > 1) parts.push({ text: T("battleBoost", { n: times }), st: snap(), actor: m.who });
-      for (const ln of btLines(mv.say, v)) parts.push({ text: ln, st: snap(), actor: m.who });
-      if (mv.kind === "help") {
-        const next = b.members.slice(i + 1).find((x) => !x.leader && x.tactics.length);
-        if (next) {
-          boost = Math.max(2, power);
-          parts.push({ text: T("battleHelp", { target: whoName(next.who), n: boost }), st: snap(), actor: m.who, target: next.who, fx: "help" });
-        } else {
-          parts.push({ text: T("battleHelpNone"), st: snap(), actor: m.who });
+      const parts = [];
+      const add = (text, extra) => { if (!quiet && text) parts.push(Object.assign({ text, st: snap(), actor: m.who }, extra)); };
+      const v = quiet ? null : vars({ who: whoName(m.who), move: fill(mv.name || id) });
+      if (!quiet) {
+        add(mv.text ? btText(mv.text, v) : T("battleUse", v), { fx: mv.ribbon ? "ribbon" : "" });
+        if (times > 1) add(T("battleBoost", { n: times }));
+        for (const ln of btLines(mv.say, v)) add(ln);
+      }
+      if (mv.kind === "attack") {
+        const weak = b.weak.includes(mv.type);
+        const dmg = (power + st.cheer) * Math.max(1, Number(mv.hits) || 1) * (weak ? 2 : 1) * times * (charge || 1);
+        st.foe = Math.max(0, st.foe - dmg);
+        if (!quiet) {
+          if (charge > 1) add(T("battleCharged", { n: charge }));
+          if (weak) add(T("battleWeak"));
+          add(T("battleFoeDamage", vars({ n: dmg })), { fx: st.foe > 0 ? "hit" : "" });
         }
+        if (st.foe <= 0) {
+          st.won = true;
+          if (!quiet) {
+            const lines = btLines(e.break, v);
+            (lines.length ? lines : [T("battleWin", v)]).forEach((ln, k) => add(ln, { actor: k ? "" : m.who, fx: k ? "" : "break" }));
+          }
+        } else if (!st.hitSaid) {
+          st.hitSaid = true;
+          if (!quiet) for (const ln of btLines(e.hitSay, v)) add(ln, { actor: "" });
+        }
+      } else if (mv.kind === "heal") {
+        const n = Math.min(b.hearts - st.hearts, power * times);
+        if (n > 0) st.hearts += n;
+        if (!quiet) add(n > 0 ? T("battleHeal", { n }) : T("battleHealFull"), { fx: n > 0 ? "heal" : "" });
       } else if (mv.kind === "cheer") {
         st.cheer = power * times;
         st.cheerLeft = Math.max(1, Number(mv.turns) || 1);
-        parts.push({ text: T("battleCheer", { n: st.cheerLeft }), st: snap(), actor: m.who, fx: "cheer" });
-      } else if (mv.kind === "heal") {
-        const n = Math.min(b.hearts - st.hearts, power * times);
-        if (n > 0) {
-          st.hearts += n;
-          parts.push({ text: T("battleHeal", { n }), st: snap(), actor: m.who, fx: "heal" });
-        } else {
-          parts.push({ text: T("battleHealFull"), st: snap(), actor: m.who });
-        }
-      } else if (mv.kind === "attack" && b.weak.includes(mv.type)) {
-        st.gauge = Math.max(0, st.gauge - (power + st.cheer) * times);
-        if (st.gauge <= 0) {
-          st.won = true;
-          const lines = btLines(e.break, v);
-          (lines.length ? lines : [T("battleBreak", v)]).forEach((ln, k) => parts.push({ text: ln, st: snap(), actor: k ? "" : m.who, fx: k ? "" : "break" }));
-        } else {
-          parts.push({ text: e.hit ? btText(e.hit, v) : T("battleHit", v), st: snap(), actor: m.who, fx: "hit" });
-          if (!st.hitSaid) {
-            st.hitSaid = true;
-            for (const ln of btLines(e.hitSay, v)) parts.push({ text: ln, st: snap() });
-          }
-        }
-      } else if (mv.kind === "attack") {
-        // 効かない技：理由が分かる文を出す（技の bounce か、雪だるまの bounce）
-        const lines = btLines(mv.bounce != null ? mv.bounce : e.bounce, v);
-        (lines.length ? lines : [T("battleBounce")]).forEach((ln, k) => parts.push({ text: ln, st: snap(), actor: k ? "" : m.who, fx: k ? "" : "bounce" }));
+        if (!quiet) add(T("battleCheer", { n: st.cheerLeft }), { fx: "cheer" });
+      } else if (mv.kind === "help") {
+        const next = b.members.slice(i + 1).find((x) => x.commands.length || x.tactics.length);
+        if (next) boost = Math.max(2, power);
+        if (!quiet) add(next ? T("battleHelp", { target: whoName(next.who), n: boost }) : T("battleHelpNone"), next ? { target: next.who, fx: "help" } : {});
+      } else if (mv.kind === "guard") {
+        if (mv.all) guardAll = true;
+        else guardBig = true;
+        if (!quiet && !toArray(mv.say).length) add(T("battleGuard"));
+      } else if (mv.kind === "charge") {
+        const n = Math.max(2, power || 2);
+        st.charged[m.who] = n;
+        if (!quiet) add(T("battleCharge", { who: whoName(m.who), n }), { fx: "charge" });
       }
-      act(parts);
+      if (!quiet) act(parts);
     }
 
-    // 雪だるまの番：減らしきれなかったゲージが元にもどる → 攻撃 → ふぶき
+    // 相手の番：actions のとおりに動く（damage：ハートを減らす / big：防げる大技 / heal：自分のハートをもどす）
     if (!st.won) {
-      const v = vars({});
-      if (e.regen && st.gauge < b.max) {
-        st.gauge = b.max;
-        act([{ text: e.regenText ? btText(e.regenText, v) : T("battleRegen", v), st: snap(), fx: "regen" }]);
+      const a = battleAction(b, st.turn);
+      if (a) {
+        const v = quiet ? null : vars({});
+        const parts = [];
+        const add = (text, extra) => { if (!quiet && text) parts.push(Object.assign({ text, st: snap() }, extra)); };
+        if (!quiet && a.text) add(btText(a.text, v));
+        const dmg = Math.max(0, Math.floor(Number(a.damage) || 0));
+        if (dmg > 0 && (guardAll || (guardBig && a.big))) {
+          if (!quiet) add(a.blocked ? btText(a.blocked, v) : T("battleBlocked"), { fx: "guard" });
+        } else if (dmg > 0) {
+          st.hearts = Math.max(0, st.hearts - dmg);
+          if (!quiet) add(T("battleDamage", { n: dmg }), { fx: "damage" });
+          if (st.hearts <= 0) st.lost = true;
+        }
+        const heal = Math.max(0, Math.floor(Number(a.heal) || 0));
+        if (!st.lost && heal > 0 && st.foe < b.foeHearts) {
+          const n = Math.min(b.foeHearts - st.foe, heal);
+          st.foe += n;
+          if (!quiet) add(T("battleFoeHeal", vars({ n })), { fx: "regen" });
+        }
+        if (!st.lost && !quiet) for (const ln of btLines(a.after, v)) add(ln);
+        if (!quiet) act(parts);
       }
-      const hurt = (text, n) => {
-        if (!b.hearts || !(n > 0) || st.lost) return;
-        st.hearts = Math.max(0, st.hearts - n);
-        act([{ text, st: snap() }, { text: T("battleDamage", { n }), st: snap(), fx: "damage" }]);
-        if (st.hearts <= 0) st.lost = true;
-      };
-      hurt(e.attackText ? btText(e.attackText, v) : T("battleAttack", v), b.damage);
-      if (b.blizzard && st.turn % b.blizzard === 0) hurt(e.blizzardText ? btText(e.blizzardText, v) : T("battleBlizzard"), 1);
       if (st.lost) {
-        act([{ text: T("battleLose"), st: snap(), fx: "lose" }]);
+        if (!quiet) act([{ text: T("battleLose"), st: snap(), fx: "lose" }]);
       } else if (st.cheerLeft > 0) {
         st.cheerLeft -= 1;
         if (!st.cheerLeft) {
           st.cheer = 0;
-          act([{ text: T("battleCheerEnd"), st: snap() }]);
+          if (!quiet) act([{ text: T("battleCheerEnd"), st: snap() }]);
         }
       }
       st.turn += 1;
@@ -1593,25 +1825,59 @@
     return h ? btLines(h.say, {}) : [];
   }
 
+  // 1ターン分の選び方を全部ならべる（コマンドのある仲間の、技の組み合わせ）
+  function battleJoint(b) {
+    let out = [[]];
+    for (const m of b.members) {
+      const opts = m.commands.length ? m.commands : [null];
+      const next = [];
+      for (const p of out) for (const c of opts) next.push([...p, c]);
+      out = next;
+    }
+    return out;
+  }
+
+  // 点検する仲間の組み合わせ
+  //   仲間をえらぶ戦い：全員が仲間になったものとして、えらび方を全部 / そうでない戦い：仲間の条件（if）がいる・いない
+  function battleTeams(id) {
+    const def = BT[id];
+    const b = battleOf(id, () => true);
+    if (!b) return [];
+    if (battleNeedsPick(b)) {
+      const out = [];
+      const rec = (s, cur) => {
+        if (cur.length === b.choose) { out.push({ on: () => true, pick: cur.slice(), label: cur.map(whoName).join("・") }); return; }
+        for (let i = s; i < b.candidates.length; i++) { cur.push(b.candidates[i]); rec(i + 1, cur); cur.pop(); }
+      };
+      rec(0, []);
+      return out;
+    }
+    const conds = battleConds(def);
+    if (!conds.length) return [{ on: () => true, pick: null, label: "" }];
+    return [false, true].map((flag) => ({ on: () => flag, pick: null, label: `${condLabel(conds)}が${flag ? "いる" : "いない"}` }));
+  }
+
   // 戦いの点検：コマンドの選び方を全部ためして、何ターンで勝てるか・負けるかを調べる
-  //   返り値：{ win：最短で勝てるターン数（勝てなければ 0）, path：そのときのコマンド,
-  //            lose：最短で負けるターン数（負けることがなければ 0） }
-  function battleCheck(id, on, limit = 30) {
-    const out = { win: 0, path: [], lose: 0 };
-    const b = battleOf(id, on);
+  //   team：battleTeams の1つ
+  //   返り値：{ win：最短で勝てるターン数（勝てなければ 0）, path：そのときの選び方（ターンごと）,
+  //            lose：最短で負けるターン数（負けることがなければ 0）,
+  //            spam：全員が「いちばん強い攻撃」だけを選んだときの結果（{ win: true, turn: 3 } など） }
+  function battleCheck(id, team, limit = 12) {
+    const out = { win: 0, path: [], lose: 0, spam: null };
+    const b = battleOf(id, team.on, team.pick);
     if (!b) return out;
-    const cmds = b.commands.filter((c) => MV[c]);
-    if (!cmds.length) return out;
-    const key = (s) => [s.hearts, s.gauge, s.cheer, s.cheerLeft, b.blizzard ? s.turn % b.blizzard : 0].join(",");
+    const joint = battleJoint(b);
+    const key = (s) => [s.hearts, s.foe, s.cheer, s.cheerLeft, Object.keys(s.charged).sort().map((k) => k + s.charged[k]).join(";"),
+      b.actions.length ? (s.turn - 1) % b.actions.length : 0].join(",");
     let layer = [{ st: battleStart(b), path: [] }];
     const seen = new Set([key(layer[0].st)]);
     for (let n = 1; n <= limit && layer.length && !(out.win && out.lose); n++) {
       const next = [];
       for (const node of layer) {
-        for (const c of cmds) {
-          const r = battleTurn(b, node.st, c);
+        for (const picks of joint) {
+          const r = battleTurn(b, node.st, picks, true);
           if (r.state.won) {
-            if (!out.win) { out.win = n; out.path = [...node.path, c]; }
+            if (!out.win) { out.win = n; out.path = [...node.path, picks]; }
             continue;
           }
           if (r.state.lost) {
@@ -1621,35 +1887,63 @@
           const k = key(r.state);
           if (seen.has(k)) continue;
           seen.add(k);
-          next.push({ st: r.state, path: [...node.path, c] });
+          next.push({ st: r.state, path: [...node.path, picks] });
         }
       }
       layer = next;
     }
-    return out;
+    // 考えずに、全員がいちばん強い攻撃だけを選んだとき
+    const strong = b.members.map((m) => (m.commands.length ? m.commands.slice().sort((x, y) => attackValue(b, y) - attackValue(b, x))[0] : null));
+    let s = battleStart(b);
+    for (let n = 1; n <= limit; n++) {
+      s = battleTurn(b, s, strong, true).state;
+      if (s.won || s.lost) { out.spam = { win: s.won, turn: n }; break; }
+    }
+    return { ...out, members: b.members.map((m) => m.who) };
   }
 
-  // 戦いの画面を描く（雪だるま・ゲージ・ハート・仲間・コマンドの場所）
-  //   show(step)：step.st（ハート・ゲージなど）を画面に映し、step.fx の動きをつける
+  // でたらめにコマンドを選んだとき、limit ターン以内に勝てる割合（%）。テスト用メニューの点検だけで使う
+  //   毎回同じ結果になるように、決まった順番の数（疑似乱数）で選ぶ（ゲームの中では乱数を使わない）
+  function battleRandom(id, team, trials = 400, limit = 15) {
+    const b = battleOf(id, team.on, team.pick);
+    if (!b) return 0;
+    let seed = 20261224;
+    const rnd = () => (seed = (Math.imul(seed, 1103515245) + 12345) >>> 0) / 4294967296;
+    let wins = 0;
+    for (let t = 0; t < trials; t++) {
+      let s = battleStart(b);
+      for (let n = 1; n <= limit; n++) {
+        const picks = b.members.map((m) => (m.commands.length ? m.commands[Math.floor(rnd() * m.commands.length)] : null));
+        s = battleTurn(b, s, picks, true).state;
+        if (s.won) { wins += 1; break; }
+        if (s.lost) break;
+      }
+    }
+    return Math.round((wins / trials) * 100);
+  }
+
+  // 戦いの画面を描く（相手と相手のハート・みんなのハート・仲間・コマンドの場所）
+  //   show(step)：step.st（ハートなど）を画面に映し、step.fx の動きをつける
+  //   step.choosing：コマンドを選んでいる仲間 / step.picks：選んだコマンド（仲間の下に小さく出す）
   function renderBattle(container, b) {
     const e = b.enemy;
     const face = (id) => withArt(el("div", { class: "bt-face", text: (CHARS[id] && CHARS[id].emoji) || "？" }), id);
     const color = (id) => (CHARS[id] && CHARS[id].color) || "#ccc";
     const turnNode = el("span", { class: "bt-turn" });
-    const storm = el("span", { class: "bt-storm" });
-    const info = el("div", { class: "bt-info" }, el("span", { class: "bt-title", text: fill(b.def.title || "") }), turnNode, storm);
+    const alertNode = el("span", { class: "bt-storm" });
+    const info = el("div", { class: "bt-info" }, el("span", { class: "bt-title", text: fill(b.def.title || "") }), turnNode, alertNode);
     const foes = b.foes.map((id) => el("div", { class: "bt-foe", style: `--c:${color(id)}` },
       face(id), el("div", { class: "bt-name", text: whoName(id) })));
-    const pips = Array.from({ length: b.max }, () => el("span", { class: "bt-pip", text: e.icon || "◆" }));
-    const gauge = e.gauge ? el("div", { class: "bt-gauge" }, el("span", { class: "bt-gauge-name", text: fill(e.gauge) }), pips) : null;
-    const foeBox = el("div", { class: "bt-foes" }, el("div", { class: "bt-foe-row" }, foes), gauge);
+    const pips = Array.from({ length: b.foeHearts }, () => el("span", { class: "bt-pip", text: e.icon || "♥" }));
+    const gauge = el("div", { class: "bt-gauge" + (pips.length > 10 ? " many" : "") }, el("span", { class: "bt-gauge-name", text: fill(e.label || T("battleFoeHearts")) }), pips);
+    const foeBox = el("div", { class: "bt-foes" }, el("div", { class: "bt-foe-wrap" }, el("div", { class: "bt-foe-row" }, foes), gauge));
     const hearts = Array.from({ length: b.hearts }, () => el("span", { class: "bt-heart", text: "♥" }));
     const buff = el("span", { class: "bt-buff", hidden: true });
-    const status = el("div", { class: "bt-status", hidden: !b.hearts },
+    const status = el("div", { class: "bt-status" },
       el("span", { class: "bt-hearts" }, el("span", { class: "bt-hearts-name", text: T("battleHearts") }), hearts), buff);
     const members = b.members.map((m) => el("div", {
       class: "bt-member" + (m.leader ? " leader" : ""), "data-id": m.who, style: `--c:${color(m.who)}`,
-    }, face(m.who), el("div", { class: "bt-name", text: whoName(m.who) })));
+    }, face(m.who), el("div", { class: "bt-name", text: whoName(m.who) }), el("div", { class: "bt-plan" })));
     const row = el("div", { class: "bt-members" + (members.length > 5 ? " many" : "") }, members);
     const team = el("div", { class: "bt-team" }, status, row);
     const menu = el("div", { class: "bt-menu", onclick: (ev) => ev.stopPropagation() });
@@ -1667,35 +1961,288 @@
     };
     const show = (step) => {
       const s = step.st || {};
-      turnNode.textContent = b.hearts ? T("battleTurn", { n: s.turn }) : "";
-      if (b.hearts && b.blizzard) {
-        const at = Math.ceil(s.turn / b.blizzard) * b.blizzard;
-        storm.textContent = at === s.turn ? T("battleStormNow") : T("battleStorm", { n: at });
-      } else {
-        storm.textContent = "";
-      }
-      pips.forEach((p, i) => p.classList.toggle("off", i >= s.gauge));
+      turnNode.textContent = T("battleTurn", { n: s.turn });
+      // このターンの終わりの相手の行動に、予告（alert）があれば出す
+      const a = battleAction(b, s.turn);
+      alertNode.textContent = a && a.alert ? fill(a.alert) : "";
+      pips.forEach((p, i) => p.classList.toggle("off", i >= s.foe));
       hearts.forEach((h, i) => h.classList.toggle("off", i >= s.hearts));
       buff.hidden = !(s.cheerLeft > 0);
       if (s.cheerLeft > 0) buff.textContent = T("battleCheerOn", { n: s.cheerLeft });
-      for (const n of members) {
-        n.classList.toggle("acting", Boolean(step.actor) && n.dataset.id === step.actor);
-        n.classList.toggle("helped", Boolean(step.target) && n.dataset.id === step.target);
-      }
+      members.forEach((n, k) => {
+        const id = n.dataset.id;
+        const charged = Boolean(s.charged && s.charged[id]);
+        const mv = step.picks && step.picks[k] ? MV[step.picks[k]] : null;
+        n.classList.toggle("acting", Boolean(step.actor) && id === step.actor);
+        n.classList.toggle("helped", Boolean(step.target) && id === step.target);
+        n.classList.toggle("choosing", Boolean(step.choosing) && id === step.choosing);
+        n.classList.toggle("charged", charged);
+        n.querySelector(".bt-plan").textContent = mv ? fill(mv.name || "") : charged ? T("battleChargeOn") : "";
+      });
       const fx = step.fx || "";
-      if (["hit", "bounce", "break", "regen"].includes(fx)) flash(foeBox, "fx-" + fx);
-      if (["damage", "heal", "cheer"].includes(fx)) flash(team, "fx-" + fx);
-      if (fx === "break") foeBox.classList.add("broken");
+      if (["hit", "break", "regen", "guard"].includes(fx)) flash(foeBox, "fx-" + fx);
+      if (["damage", "heal", "cheer", "charge"].includes(fx)) flash(team, "fx-" + fx);
+      if (fx === "break") {
+        foeBox.classList.add("broken");
+        row.classList.add("ribbon");
+      }
       if (fx === "lose") team.classList.add("lost");
       if (fx === "ribbon") row.classList.add("ribbon");
-      if (fx === "retry") {
-        foeBox.classList.remove("broken");
-        team.classList.remove("lost");
-        row.classList.remove("ribbon");
-      }
     };
     show({ st: battleStart(b) });
     return { root, menu, show };
+  }
+
+  // ==============================================================
+  // 家全体の地図（2-7・4-3・4-5。house.js の部屋を、at の位置に並べて描く）
+  //   見えていない部屋は、白い霧の中。見える部屋が増えると、地図が広がる（見える範囲に合わせて小さくなる）
+  //   夢の部屋（息子さんの部屋）は、room.js の家具を使う（room.js の2マスを、1マスにまとめる）
+  //   data.js の場面に house: { … } と書くと、この地図を出す。lines の { house: { … } } で地図を変える
+  //     show：見せる部屋（"all" で全部）/ home：本当の家具の見た目にする部屋 / marks：会った仲間の印
+  //     fog：家の外の霧 / star：プレゼントの星 / light：夢の部屋に光が集まる / tokens・appear：夢の部屋に仲間が現れる
+  // ==============================================================
+  const HOUSE_PAD = 1;   // 家のまわりに描く霧の幅（マス）
+
+  // room.js の家具を、家全体の地図の大きさにする（k：room.js の何マスが、ここの1マスか）
+  function roomItemsScaled(k) {
+    return toArray(RM && RM.items).map((it) => ({
+      x: it.x / k, y: it.y / k, w: it.w / k, h: it.h / k,
+      name: it.wall ? "" : it.name, icon: it.icon, color: it.color, outside: Boolean(it.wall), shine: Boolean(it.shine),
+    }));
+  }
+
+  // 家全体の地図に描く部屋（house.js の maps のうち、at があるもの）
+  function houseRooms() {
+    const out = [];
+    for (const [id, m] of Object.entries((HS && HS.maps) || {})) {
+      if (!m || !Array.isArray(m.at) || !(m.w > 0) || !(m.h > 0)) continue;
+      const looks = {};
+      for (const look of ["nature", "home"]) {
+        if (!m[look]) continue;
+        const lm = lookMap(id, look);
+        if (m.room && RM) lm.items = roomItemsScaled((RM.cols || m.w) / m.w);   // 夢の部屋の家具は room.js
+        looks[look] = lm;
+      }
+      if (!looks.nature && !looks.home) continue;
+      out.push({ id, x: Number(m.at[0]) || 0, y: Number(m.at[1]) || 0, w: m.w, h: m.h, looks, room: Boolean(m.room) });
+    }
+    return out;
+  }
+
+  // プレゼントの星を出す場所（このPCで決めた場所。決めていなければ、リビングのまんなか【仮】）
+  function presentSpot(rooms) {
+    const p = presentAt();
+    if (p) return { x: p.x + 0.5, y: p.y + 0.5, temp: false };
+    const r = rooms.find((x) => x.id === "living") || rooms[0];
+    return r ? { x: r.x + r.w / 2, y: r.y + r.h / 2, temp: true } : null;
+  }
+
+  // 家全体の地図を描く
+  //   spec：はじめの状態（show・home・marks など）/ opts.static：動かさず、家全体を見せる（メニューの地図・テスト用）
+  //   opts.star：星の場所 { x, y }（書かなければ presentSpot）/ opts.fadeIn：ふわっと出す
+  //   返り値：apply(fx, animate)（地図を変える）・fit(animate)（大きさを合わせる）・appear(who)・cellAt(x, y)・stop()
+  function renderHouse(container, spec, opts = {}) {
+    const rooms = houseRooms();
+    const stub = { root: null, apply() {}, fit() {}, appear() {}, cellAt: () => null, stop() {} };
+    if (!rooms.length) {
+      container.replaceChildren(el("div", { class: "room-missing", text: "house.js の地図を読み込めませんでした。" }));
+      return stub;
+    }
+    const P = HOUSE_PAD;
+    const bx0 = Math.min(...rooms.map((r) => r.x)) - P;
+    const by0 = Math.min(...rooms.map((r) => r.y)) - P;
+    const bx1 = Math.max(...rooms.map((r) => r.x + r.w)) + P;
+    const by1 = Math.max(...rooms.map((r) => r.y + r.h)) + P;
+    const BW = bx1 - bx0;
+    const BH = by1 - by0;
+    const at = (x, y) => `left:${((x - bx0) / BW) * 100}%;top:${((y - by0) / BH) * 100}%`;
+    const box = (x, y, w, h) => `${at(x, y)};width:${(w / BW) * 100}%;height:${(h / BH) * 100}%`;
+    const board = el("div", { class: "hm-board" });
+    const view = el("div", { class: "hm-view" + (opts.static ? " static" : "") + (opts.fadeIn ? " fade-in" : ""), role: "img", "aria-label": T("houseMapTitle") },
+      el("div", { class: "hm-mist", "aria-hidden": "true" }), board);
+    container.replaceChildren(view);
+
+    // 部屋（見た目は2組。夢の見た目 nature と、本当の家具 home を重ねておき、切りかえる）
+    const roomNode = {};
+    for (const r of rooms) {
+      roomNode[r.id] = el("div", { class: "hm-room hidden", "data-id": r.id, style: box(r.x, r.y, r.w, r.h) },
+        ["nature", "home"].filter((k) => r.looks[k]).map((k) => houseLook(r, k)));
+      board.append(roomNode[r.id]);
+    }
+    // 会った仲間の印（house.js の marks）
+    const marks = Object.entries((HS && HS.marks) || {}).map(([id, mk]) => {
+      const r = mk && rooms.find((x) => x.id === mk.map);
+      if (!r || !CHARS[id]) return null;
+      let cx = Number(mk.x) || 0;
+      let cy = Number(mk.y) || 0;
+      // shine: true は、room.js の光る場所（ブラッキーのぬいぐるみを置く場所）
+      const it = mk.shine && r.room ? toArray(r.looks.home && r.looks.home.items).find((x) => x.shine) : null;
+      if (it) { cx = it.x + it.w / 2; cy = it.y + it.h / 2; }
+      const node = el("div", { class: "hm-mark", "data-id": id, "data-map": r.id, style: `${at(r.x + cx, r.y + cy)};--c:${CHARS[id].color || "#ccc"}` },
+        withArt(el("span", { class: "hm-mark-face", text: CHARS[id].emoji || "？" }), id));
+      board.append(node);
+      return node;
+    }).filter(Boolean);
+    // 夢の部屋に集まる仲間（4-3）と、光
+    const dream = rooms.find((r) => r.room) || rooms[0];
+    const tokens = [];
+    const tokenBox = el("div", { class: "hm-tokens" });
+    const light = el("div", { class: "hm-light", style: at(dream.x + dream.w / 2, dream.y + dream.h / 2), "aria-hidden": "true" },
+      Array.from({ length: 12 }, (_, i) => el("i", { style: `--a:${i * 30}deg;--d:${(i % 4) * 0.18}s` })));
+    // プレゼントの星
+    const spot = opts.star !== undefined ? opts.star : presentSpot(rooms);
+    const star = el("div", { class: "hm-star" + (spot && spot.temp ? " temp" : ""), style: spot ? at(spot.x, spot.y) : "", "aria-hidden": "true" },
+      el("span", { class: "hm-star-icon", text: "★" }),
+      spot && spot.temp ? el("span", { class: "hm-star-temp", text: T("houseStarTemp") }) : null);
+    board.append(light, tokenBox, star);   // 光は、仲間のうしろに
+
+    const st = { shown: new Set(), home: new Set(), marks: false, fog: false, star: false, light: false, appear: false };
+    const ids = (v) => (v === "all" ? rooms.map((r) => r.id) : toArray(v)).filter((id) => roomNode[id]);
+    const update = () => {
+      for (const r of rooms) {
+        roomNode[r.id].classList.toggle("hidden", !st.shown.has(r.id));
+        // 夢の見た目がない部屋（トイレなど）と夢の部屋は、いつも本当の見た目
+        roomNode[r.id].classList.toggle("home", st.home.has(r.id) || !r.looks.nature);
+      }
+      let k = 0;
+      for (const n of marks) {
+        const on = st.marks && st.shown.has(n.dataset.map) && (opts.static || state.met.includes(n.dataset.id));
+        n.classList.toggle("on", on);
+        if (on) n.style.setProperty("--i", k++);
+      }
+      star.classList.toggle("on", Boolean(st.star && spot));
+      light.classList.toggle("on", st.light);
+      view.classList.toggle("fog", st.fog);
+    };
+    // 夢の部屋に、仲間を1人ずつ置く（イーブイはまんなか、ほかは輪になって並ぶ）
+    const placeToken = (node, i) => {
+      const cx = dream.x + dream.w / 2;
+      const cy = dream.y + dream.h / 2;
+      const angle = ((i - 0.5) / 8) * Math.PI * 2 - Math.PI / 2;   // 真上をさけて、部屋の名前にかからないようにする
+      const x = i === 0 ? cx : cx + Math.cos(angle) * dream.w * 0.36;
+      const y = i === 0 ? cy : cy + Math.sin(angle) * dream.h * 0.33;
+      node.setAttribute("style", `${at(x, y)};--c:${(CHARS[node.dataset.id] && CHARS[node.dataset.id].color) || "#ccc"}`);
+    };
+    const addToken = (id, animate) => {
+      if (!CHARS[id] || tokens.some((n) => n.dataset.id === id)) return;
+      const node = el("div", { class: "hm-token" + (animate ? " pop" : ""), "data-id": id },
+        withArt(el("span", { class: "hm-mark-face", text: CHARS[id].emoji || "？" }), id));
+      // イーブイは、いつもまんなか（0番）
+      const i = id === "eevee" ? 0 : tokens.filter((n) => n.dataset.id !== "eevee").length + 1;
+      placeToken(node, i);
+      tokens.push(node);
+      tokenBox.append(node);
+    };
+
+    // 見えている部屋に合わせて、地図の大きさと位置を決める（animate：なめらかに動かす）
+    const fit = (animate) => {
+      const vw = view.clientWidth;
+      const vh = view.clientHeight;
+      if (!vw || !vh) return;
+      const cell = Math.min(vw / BW, vh / BH);
+      board.style.width = `${BW * cell}px`;
+      board.style.height = `${BH * cell}px`;
+      board.style.setProperty("--cell", `${cell}px`);
+      const shown = rooms.filter((r) => st.shown.has(r.id));
+      let x0 = bx0;
+      let y0 = by0;
+      let x1 = bx1;
+      let y1 = by1;
+      if (!opts.static && shown.length && !st.fog) {
+        x0 = Math.min(...shown.map((r) => r.x)) - 0.5;
+        y0 = Math.min(...shown.map((r) => r.y)) - 0.5;
+        x1 = Math.max(...shown.map((r) => r.x + r.w)) + 0.5;
+        y1 = Math.max(...shown.map((r) => r.y + r.h)) + 0.5;
+      }
+      const s = Math.min(vw / ((x1 - x0) * cell), vh / ((y1 - y0) * cell), 3);
+      const tx = (vw - (x1 - x0) * cell * s) / 2 - (x0 - bx0) * cell * s;
+      const ty = (vh - (y1 - y0) * cell * s) / 2 - (y0 - by0) * cell * s;
+      const transform = `translate(${tx.toFixed(1)}px, ${ty.toFixed(1)}px) scale(${s.toFixed(4)})`;
+      if (animate) {
+        board.style.transform = transform;
+      } else {
+        board.classList.add("no-anim");
+        board.style.transform = transform;
+        void board.offsetWidth;
+        board.classList.remove("no-anim");
+      }
+    };
+    const apply = (fx, animate) => {
+      const f = fx && typeof fx === "object" ? fx : {};
+      if (!animate) board.classList.add("no-anim");
+      for (const id of ids(f.show)) st.shown.add(id);
+      for (const id of ids(f.home)) { st.home.add(id); st.shown.add(id); }
+      for (const key of ["marks", "fog", "star", "light", "appear"]) if (f[key] != null) st[key] = Boolean(f[key]);
+      for (const id of toArray(f.tokens)) addToken(id, animate);
+      update();
+      fit(animate);
+      if (!animate) {
+        void board.offsetWidth;
+        board.classList.remove("no-anim");
+      }
+    };
+    // 話した仲間が、夢の部屋に現れる（appear のとき）
+    const appear = (who) => {
+      if (st.appear && who !== "hero" && CHARS[who] && !CHARS[who].voice) addToken(who, true);
+    };
+    // 画面の (clientX, clientY) にある、家全体の地図のマス（テスト用メニューで、プレゼントの場所を決めるため）
+    const cellAt = (cx, cy) => {
+      const rect = board.getBoundingClientRect();
+      if (!rect.width || !rect.height) return null;
+      const x = Math.floor(((cx - rect.left) / rect.width) * BW + bx0);
+      const y = Math.floor(((cy - rect.top) / rect.height) * BH + by0);
+      return rooms.some((r) => x >= r.x && y >= r.y && x < r.x + r.w && y < r.y + r.h) ? { x, y } : null;
+    };
+    const ro = typeof ResizeObserver === "function" ? new ResizeObserver(() => fit(false)) : null;
+    if (ro) ro.observe(view);
+    apply(spec, false);
+    return { root: view, apply, fit, appear, cellAt, stop: () => { if (ro) ro.disconnect(); } };
+  }
+
+  // 部屋の見た目1組（床・かべの色、家具、出入口と窓、部屋の名前）
+  function houseLook(r, look) {
+    const lm = r.looks[look];
+    const pos = (x, y, w, h) => `left:${(x / r.w) * 100}%;top:${(y / r.h) * 100}%;width:${(w / r.w) * 100}%;height:${(h / r.h) * 100}%`;
+    const node = el("div", { class: `hm-look ${look} hf-${lm.floor || "none"} hw-${lm.wall || "none"}` });
+    for (const it of lm.items) {
+      if (it.shine) continue;   // 光る場所（夢の中の目印）は、家の地図には描かない
+      if (it.outside) {
+        node.append(el("div", { class: "hm-outside", style: pos(it.x, it.y, it.w, it.h) }));
+        continue;
+      }
+      const small = it.w * it.h < 1.5;
+      node.append(el("div", {
+        class: "hm-item" + (it.look ? " look-" + it.look : "") + (small ? " small" : "") + (it.h > it.w * 1.5 ? " tall" : ""),
+        style: `${pos(it.x, it.y, it.w, it.h)};--c:${it.color || "#ddd"}`,
+      },
+        it.icon ? el("span", { class: "hm-icon", text: it.icon, "aria-hidden": "true" }) : null,
+        it.name && !small ? el("span", { class: "hm-label", text: fill(it.name) }) : null));
+    }
+    for (const e of lm.edges) {
+      if (!e.kind) continue;
+      for (const c of e.cells) {
+        const along = e.side === "top" || e.side === "bottom"
+          ? `left:${(c / r.w) * 100}%;width:${(1 / r.w) * 100}%`
+          : `top:${(c / r.h) * 100}%;height:${(1 / r.h) * 100}%`;
+        node.append(el("div", { class: `hm-edge ${e.side} k-${e.kind}`, style: along }));
+      }
+    }
+    if (lm.name) node.append(el("div", { class: "hm-name", text: fill(lm.name) }));
+    return node;
+  }
+
+  // 物語画面に、家全体の地図を出す（もう出ていれば、spec のとおりに変える）
+  function showHouse(spec, animate) {
+    if (!HS) return;
+    if (NV.house) {
+      NV.house.apply(spec, animate);
+      return;
+    }
+    novel.chars.replaceChildren();
+    NV.shown = [];
+    novel.houseBox.hidden = false;
+    novel.stage.classList.add("house-mode");   // 選択肢を横に並べて、地図を大きく見せる
+    NV.house = renderHouse(novel.houseBox, spec, { fadeIn: animate });
   }
 
   // ==============================================================
@@ -1773,9 +2320,9 @@
       }
     },
 
-    // 「入力中…」を出してから、メッセージを1つずつ表示する
+    // 「入力中…」を出してから、メッセージを1つずつ表示する（演出の行は、メッセージ画面では使わない）
     say(lines, then) {
-      const items = toArray(lines).filter(visible).map(parseLine);
+      const items = toArray(lines).filter((ln) => visible(ln) && !isEffect(ln)).map(parseLine);
       const token = gen;
       chat.foot.replaceChildren();
       let i = 0;
@@ -1837,7 +2384,8 @@
         },
       }, field, el("button", { type: "submit", class: "send-btn", text: T("send") }));
       const skipText = onSkip ? fill(spec.skip.text || T("skip")) : "";
-      chat.foot.replaceChildren(
+      // null を渡すと「null」という文字が出てしまうので、使う部品だけを並べる
+      chat.foot.replaceChildren(...[
         spec.prompt ? el("div", { class: "foot-prompt", text: fill(spec.prompt) }) : null,
         form,
         onHint || onSkip ? el("div", { class: "foot-links" },
@@ -1856,7 +2404,8 @@
               addMsg({ who: "hero", text: skipText });
               onSkip();
             },
-          }) : null) : null);
+          }) : null) : null,
+      ].filter(Boolean));
       scrollChat();
       if (!TOUCH) field.focus({ preventScroll: true });
     },
@@ -2049,7 +2598,7 @@
       el("h2", { class: "end-title", text: fill(e.title || "") }),
       e.text ? el("p", { class: "end-text", text: fill(e.text) }) : null,
       el("div", { class: "end-buttons" },
-        e.map ? el("button", { class: "btn", type: "button", text: T("endMap"), onclick: openMap }) : null,
+        e.map ? el("button", { class: "btn", type: "button", text: houseMapOn() ? T("endHouseMap") : T("endMap"), onclick: openMap }) : null,
         e.next ? el("button", { class: "btn primary", type: "button", text: fill(e.nextLabel || T("endNext")), onclick: () => runScene(e.next) }) : null,
         el("button", { class: "btn", type: "button", text: T("toTitle"), onclick: showTitle }))));
     show("end");
@@ -2099,19 +2648,37 @@
   }
 
   // 夢の部屋の地図は、部屋が明るくなってから（data.js の set: "roomMap"）メニューに出す
+  // 2-7 で家全体の地図ができたら（set: "houseMap"）、家の地図に変わる
+  const houseMapOn = () => Boolean(HS) && flagOn("houseMap");
   function openMenu() {
     openOverlay(el("div", { class: "panel" },
       el("h2", { text: T("menuTitle") }),
       el("button", { class: "btn", type: "button", text: T("menuParty"), onclick: openParty }),
-      RM && flagOn("roomMap")
-        ? el("button", { class: "btn", type: "button", text: T("menuMap"), onclick: openMap })
+      houseMapOn() || (RM && flagOn("roomMap"))
+        ? el("button", { class: "btn", type: "button", text: houseMapOn() ? T("menuHouseMap") : T("menuMap"), onclick: openMap })
         : null,
       el("button", { class: "btn", type: "button", text: T("menuToTitle"), onclick: showTitle }),
       el("p", { class: "panel-note", text: T("menuNote") }),
       el("button", { class: "btn primary", type: "button", text: T("close"), onclick: closeOverlay })));
   }
 
+  // 家全体の地図（2-7 のあと）。会った仲間の印と、プレゼントの星（4-5 で光ったあと）も出す
+  function openHouseMap() {
+    const box = el("div", { class: "map-box house-map" });
+    let hv = null;
+    openOverlay(el("div", { class: "panel map-panel house-panel" },
+      el("h2", { text: T("houseMapTitle") }),
+      box,
+      el("p", { class: "map-caption", text: T("houseMapCaption") }),
+      el("button", { class: "btn primary", type: "button", text: T("close"), onclick: closeOverlay })), () => { if (hv) hv.stop(); });
+    hv = renderHouse(box, { show: "all", home: "all", marks: true, fog: true, star: flagOn("presentOnMap") && flagOn("presentShown") }, { static: true });
+  }
+
   function openMap() {
+    if (houseMapOn()) {
+      openHouseMap();
+      return;
+    }
     const caption = el("p", { class: "map-caption", text: T("mapCaption") });
     const box = el("div", { class: "map-box" });
     renderRoom(box, (it) => { caption.textContent = fill(it.text || it.name); });
@@ -2273,18 +2840,22 @@
     "skip", "wrong", "next", "draft", "chatTitle",
     "wordGet", "wordFrom", "wordGetChat", "wordNote", "ok", "metToast",
     "partyTitle", "partyNote", "partyNoteMet", "partyNoteAll", "close",
-    "menuTitle", "menuParty", "menuMap", "menuToTitle", "menuNote",
+    "menuTitle", "menuParty", "menuMap", "menuHouseMap", "menuToTitle", "menuNote",
     "mapTitle", "mapCaption", "explore", "roomDone", "darkDefault", "darkShine",
+    "houseMapTitle", "houseMapCaption", "houseStarTemp",
     "iceHelp", "iceCount", "iceReset", "iceSkip", "iceBest", "iceClear",
     "walkHelp", "walkHelpTouch", "walkGoal", "walkLook", "walkNothing", "walkThing", "walkTeam", "walkTeamNone",
-    "battleAsk", "battleUse", "battleBoost", "battleBounce", "battleHit", "battleBreak", "battleRegen",
-    "battleHelp", "battleHelpNone", "battleCheer", "battleCheerEnd", "battleHeal", "battleHealFull",
-    "battleAttack", "battleBlizzard", "battleDamage", "battleLose", "battleRetry", "battleTurn",
-    "battleStorm", "battleStormNow", "battleHearts", "battleCheerOn", "battleSkip",
-    "endNext", "endMap", "toTitle", "noScene",
+    "battleAsk", "battleUse", "battleBoost", "battleHelp", "battleHelpNone", "battleCheer", "battleCheerEnd",
+    "battleHeal", "battleHealFull", "battleGuard", "battleBlocked", "battleCharge", "battleCharged", "battleChargeOn",
+    "battleWeak", "battleFoeDamage", "battleFoeHeal", "battleFoeHearts", "battleWin",
+    "battleDamage", "battleLose", "battleRetry", "battleTurn", "battleHearts", "battleCheerOn", "battleSkip",
+    "battleChoose", "battleChooseNote", "battleChooseOk", "battleChooseLeft", "battleBack",
+    "endNext", "endMap", "endHouseMap", "toTitle", "noScene",
   ];
   // 戦いの文で使える { }（{name} などのほかに）
-  const BATTLE_VARS = ["who", "move", "enemy", "gauge", "target", "n"];
+  const BATTLE_VARS = ["who", "move", "enemy", "target", "n"];
+  // 家の地図の演出（{ house: … }）で使える項目
+  const HOUSE_KEYS = ["show", "home", "marks", "fog", "star", "light", "tokens", "appear"];
 
   function validate() {
     const errors = [];
@@ -2303,8 +2874,30 @@
         return whole;
       });
     };
+    // 家の地図の演出（場面の house と、lines の { house: … }）
+    const roomIds = new Set(houseRooms().map((r) => r.id));
+    const checkHouseFx = (fx, where) => {
+      if (!HS) {
+        errors.push(`${where}：家の地図を使いますが、house.js を読み込めませんでした。`);
+        return;
+      }
+      if (!fx || typeof fx !== "object") {
+        errors.push(`${where}：house は { show: […] } のように書いてください。`);
+        return;
+      }
+      for (const key of Object.keys(fx)) if (!HOUSE_KEYS.includes(key)) warnings.push(`${where}：house の「${key}」は使えません（${HOUSE_KEYS.join("・")}）。`);
+      for (const key of ["show", "home"]) {
+        if (fx[key] === "all") continue;
+        for (const id of toArray(fx[key])) if (!roomIds.has(id)) errors.push(`${where}：house の ${key} の「${id}」という部屋が、house.js にありません（at のある部屋）。`);
+      }
+      for (const id of toArray(fx.tokens)) if (!CHARS[id]) errors.push(`${where}：house の tokens の「${id}」というキャラクターがいません。`);
+    };
     const checkLines = (lines, where, allow) => {
       toArray(lines).forEach((ln, i) => {
+        if (isEffect(ln)) {
+          checkHouseFx(ln.house, `${where} の${i + 1}行目`);
+          return;
+        }
         if (ln && typeof ln === "object" && !ln.who && ln.text == null) {
           errors.push(`${where} の${i + 1}行目に text（文章）がありません。`);
           return;
@@ -2323,6 +2916,13 @@
     if (!ids.has(S.start)) errors.push(`SETTINGS の start：「${S.start}」という場面がありません。`);
     for (const [key, value] of Object.entries(S.hidden || {})) {
       if (!unhide(value)) errors.push(`SETTINGS の hidden の ${key}：「表示用に隠す」で作った文字（~ で始まる）を書いてください。`);
+    }
+    for (const key of Object.keys(LOCAL)) {
+      const d = LOCAL[key] && LOCAL[key].default;
+      if (d && String(d).startsWith("~") && !unhide(d)) errors.push(`SETTINGS の local の ${key}：default の「表示用に隠す」文字が読めません（🛠 →「表示用に隠す」で作り直してください）。`);
+    }
+    if (S.presentOnMap === true && HS && !presentAt()) {
+      warnings.push("SETTINGS の presentOnMap が true ですが、このPCで、プレゼントの場所が決まっていません（🛠 →「遊ぶ前の準備」）。今は、リビングのまんなかに【仮】の星を出します。");
     }
     for (const [id, sc] of Object.entries(SCN)) {
       const at = `場面「${id}」`;
@@ -2378,7 +2978,12 @@
         checkLines(sc.ice.clear, `${at} の ice の clear`);
         if (sc.mode === "chat") warnings.push(`${at}：メッセージ形式（chat）では、氷の床のパズルを表示できません。`);
       }
-      if (sc.walk) checkWalk(id, sc, at, errors, warnings, check, checkLines);
+      if (sc.walk) checkWalk(id, sc, at, errors, warnings, check, checkLines, checkText);
+      if (sc.house) {
+        checkHouseFx(sc.house, `${at} の house`);
+        if (sc.battle || sc.walk || sc.ice || sc.room || sc.puzzle) errors.push(`${at}：house（家の地図）は、battle・walk・ice・room・puzzle と一緒には使えません。`);
+      }
+      if (sc.mode === "chat" && (sc.house || toArray(sc.lines).some(isEffect))) warnings.push(`${at}：メッセージ形式（chat）では、家の地図を表示できません。`);
       if (sc.battle) {
         if (!BT[sc.battle]) errors.push(`${at} の battle：「${sc.battle}」という戦いが、BATTLES にありません。`);
         if (!sc.next) errors.push(`${at} の battle には、next（勝ったあとの行き先）が必要です。`);
@@ -2442,9 +3047,16 @@
     return { errors, warnings };
   }
 
-  // house.js の地図の点検（家具や出入口が、部屋からはみ出していないか）
+  // house.js の地図の点検（家具や出入口が、部屋からはみ出していないか・会った仲間の印の場所）
   function checkHouse(errors, warnings) {
     if (!HS) return;
+    for (const [id, mk] of Object.entries(HS.marks || {})) {
+      const at = `house.js の marks の「${id}」`;
+      if (!CHARS[id]) errors.push(`${at}：「${id}」というキャラクターがいません。`);
+      const m = mk && HS.maps && HS.maps[mk.map];
+      if (!m || !Array.isArray(m.at)) errors.push(`${at}：map の「${mk && mk.map}」という部屋が、家全体の地図にありません（at のある部屋）。`);
+      else if (!mk.shine && !(mk.x >= 0 && mk.y >= 0 && mk.x <= m.w && mk.y <= m.h)) warnings.push(`${at}：場所が、部屋の外です。`);
+    }
     for (const [id, m] of Object.entries((HS && HS.maps) || {})) {
       const at = `house.js の「${id}」`;
       if (!m || !(m.w > 0) || !(m.h > 0)) {
@@ -2485,7 +3097,7 @@
   const condLabel = (conds) => conds.map((f) => (CHARS[f] ? charName(CHARS[f]) : f)).join("・");
 
   // 戦いの点検（data.js の BATTLES・MOVES）：書きまちがいと、勝てるかどうか
-  const MOVE_KINDS = ["attack", "help", "cheer", "heal"];
+  const MOVE_KINDS = ["attack", "help", "cheer", "heal", "guard", "charge"];
   function checkBattles(errors, warnings, check, checkLines) {
     const used = new Set(Object.values(SCN).filter((sc) => sc && sc.battle).map((sc) => sc.battle));
     for (const [id, def] of Object.entries(BT)) {
@@ -2496,9 +3108,7 @@
       }
       if (!used.has(id)) warnings.push(`${at} は、どの場面でも使われていません（場面の battle）。`);
       if (!CHARS[def.leader]) errors.push(`${at} の leader：「${def.leader}」というキャラクターがいません。`);
-      const cmds = toArray(def.commands);
-      if (!cmds.length) errors.push(`${at} に commands（操作するキャラのコマンド）がありません。`);
-      for (const c of cmds) if (!MV[c]) errors.push(`${at} の commands：「${c}」という技が、MOVES にありません。`);
+      if (!(Number(def.hearts) >= 1)) errors.push(`${at} の hearts（みんなのハート）は、1 以上にしてください。`);
       toArray(def.party).forEach((p, i) => {
         const m = typeof p === "string" ? { who: p } : p;
         const where = `${at} の party の${i + 1}番目`;
@@ -2507,11 +3117,16 @@
           return;
         }
         if (!CHARS[m.who]) errors.push(`${where}：「${m.who}」というキャラクターがいません。`);
+        for (const c of toArray(m.commands)) if (!MV[c]) errors.push(`${where} の commands：「${c}」という技が、MOVES にありません。`);
         for (const t of toArray(m.tactics)) {
           const mv = typeof t === "string" ? t : t && t.move;
           if (!MV[mv]) errors.push(`${where} の tactics：「${mv}」という技が、MOVES にありません。`);
         }
+        if (!toArray(m.commands).length && !toArray(m.tactics).length) warnings.push(`${where}（${charName(CHARS[m.who])}）には commands も tactics もないので、戦いでは動きません。`);
       });
+      const choose = Number(def.choose) || 0;
+      const others = battleParty(def).filter((p) => p.who !== def.leader);
+      if (choose && choose > others.length) errors.push(`${at} の choose（えらぶ人数）が、party の仲間の数（${others.length}人）より多いです。`);
       const e = def.enemy;
       if (!e || typeof e !== "object") {
         errors.push(`${at} に enemy（相手）がありません。`);
@@ -2520,14 +3135,17 @@
       const foes = toArray(e.who);
       if (!foes.length) errors.push(`${at} の enemy に who（相手のキャラクター）がありません。`);
       for (const f of foes) if (!CHARS[f]) errors.push(`${at} の enemy：「${f}」というキャラクターがいません。`);
-      if (!(Number(e.max) >= 1)) errors.push(`${at} の enemy の max（ゲージの大きさ）は、1 以上にしてください。`);
-      if (!toArray(e.weak).length) errors.push(`${at} の enemy に weak（ゲージを減らせる技のタイプ）がありません。`);
-      if (!(Number(def.hearts) > 0) && (Number(e.damage) > 0 || Number(e.blizzard) > 0)) {
-        warnings.push(`${at}：hearts が 0 なので、雪だるまの攻撃とふぶきは起きません。`);
-      }
-      for (const key of ["bounce", "hit", "hitSay", "regenText", "attackText", "blizzardText", "break"]) {
-        checkLines(e[key], `${at} の enemy の ${key}`, BATTLE_VARS);
-      }
+      if (!(Number(e.hearts) >= 1)) errors.push(`${at} の enemy の hearts（相手のハート）は、1 以上にしてください。`);
+      if (!toArray(e.actions).length) warnings.push(`${at} の enemy に actions（相手の行動）がないので、相手は何もしません。`);
+      toArray(e.actions).forEach((a, i) => {
+        const where = `${at} の enemy の actions の${i + 1}番目`;
+        if (!a || typeof a !== "object") {
+          errors.push(`${where} の書き方がおかしいようです。`);
+          return;
+        }
+        for (const key of ["text", "blocked", "alert", "after"]) checkLines(a[key], `${where} の ${key}`, BATTLE_VARS);
+      });
+      for (const key of ["hitSay", "break"]) checkLines(e[key], `${at} の enemy の ${key}`, BATTLE_VARS);
       toArray(def.hints).forEach((h, i) => {
         if (!h || !(Number(h.turn) > 0)) errors.push(`${at} の hints の${i + 1}番目：turn（何ターン目に出すか）を書いてください。`);
         else checkLines(h.say, `${at} の hints`, BATTLE_VARS);
@@ -2538,12 +3156,10 @@
         check(def.skip.next, `${at} の skip`);
         checkLines(def.skip.reply, `${at} の skip の reply`);
       }
-      // どう選んでも勝てない戦いになっていないか（仲間の条件があれば、いる・いないの両方）
-      const conds = battleConds(def);
-      for (const flag of conds.length ? [false, true] : [false]) {
-        if (battleCheck(id, () => flag).win) continue;
-        const when = conds.length ? `（${condLabel(conds)}が${flag ? "いる" : "いない"}とき）` : "";
-        errors.push(`${at}：この戦いは、どう選んでも勝てません${when}。数値や weak を見直してください。`);
+      // どう選んでも勝てない戦いになっていないか（仲間をえらぶ戦いは、えらび方を全部）
+      for (const team of battleTeams(id)) {
+        if (battleCheck(id, team).win) continue;
+        errors.push(`${at}：この戦いは、どう選んでも勝てません${team.label ? `（${team.label}）` : ""}。数値や技を見直してください。`);
       }
     }
     for (const [id, mv] of Object.entries(MV)) {
@@ -2554,15 +3170,13 @@
       }
       if (!mv.name) errors.push(`${at} に name（技の名前）がありません。`);
       if (!MOVE_KINDS.includes(mv.kind)) errors.push(`${at} の kind は、${MOVE_KINDS.join("・")} のどれかにしてください。`);
-      if (mv.kind === "attack" && !mv.type) errors.push(`${at}：攻撃の技（attack）には、type（技のタイプ）を書いてください。`);
       checkLines(mv.text, `${at} の text`, BATTLE_VARS);
       checkLines(mv.say, `${at} の say`, BATTLE_VARS);
-      checkLines(mv.bounce, `${at} の bounce`, BATTLE_VARS);
     }
   }
 
   // 歩けるマップの場面の点検：地図・人物・出入口と、そこへたどりつけるか
-  function checkWalk(id, sc, at, errors, warnings, check, checkLines) {
+  function checkWalk(id, sc, at, errors, warnings, check, checkLines, checkText) {
     if (!HS) {
       errors.push(`${at} は歩けるマップを使いますが、house.js を読み込めませんでした。`);
       return;
@@ -2601,11 +3215,27 @@
         else if (blocked.has(xy(p.x, p.y))) warnings.push(`${where}：場所 [${p.x}, ${p.y}] に家具があります。`);
         else if (ev.npc) npcCells.add(xy(p.x, p.y));
       }
-      if (!ev.say && !ev.next) errors.push(`${where}：say（セリフ）か next（次の場面）を書いてください。`);
+      if (!ev.say && !ev.next && !ev.choices) errors.push(`${where}：say（セリフ）か next（次の場面）を書いてください。`);
       check(ev.next, `${where} の next`);
       checkLines(ev.say, `${where} の say`);
+      if (ev.choices && !Array.isArray(ev.choices)) errors.push(`${where} の choices は [ ] で囲んでください。`);
+      toArray(ev.choices).forEach((c, k) => {
+        if (!c || !c.text) {
+          errors.push(`${where} の選択肢${k + 1}に text（ボタンの文字）がありません。`);
+          return;
+        }
+        check(c.next, `${where} の選択肢「${c.text}」`);
+        checkText(c.text, `${where} の選択肢`);
+        checkLines(c.reply, `${where} の選択肢「${c.text}」の reply`);
+      });
+      if (ev.choices && ev.next) warnings.push(`${where}：choices があるときは、next は使われません（選択肢の next を使います）。`);
+      if (ev.need != null) {
+        if (!(Number(ev.need) >= 1)) errors.push(`${where} の need（集まった仲間の人数）は、1 以上の数にしてください。`);
+        else if (!sc.team) errors.push(`${where} の need は、場面に team（集まった仲間）があるときだけ使えます。`);
+        else if (Number(ev.need) > toArray(sc.team).flatMap((t) => toArray(t && t.who)).length) errors.push(`${where} の need（${ev.need}人）が、team の人数より多いです（行き止まりになります）。`);
+      }
     });
-    if (!events.some((ev) => ev && ev.next)) {
+    if (!events.some((ev) => ev && (ev.next || toArray(ev.choices).some((c) => c && c.next)))) {
       errors.push(`${at}：events に next（次の場面へ進む出来事）がありません（行き止まりになります）。`);
     }
     // たどりつけるマス（スタートから歩いて行ける所）
@@ -2707,7 +3337,7 @@
       keys.map((key) => {
         const field = el("input", {
           type: "text", class: "debug-input", value: localValues[key] || "",
-          placeholder: (LOCAL[key] && LOCAL[key].default) || "", maxlength: 12, autocomplete: "off",
+          placeholder: localDefault(key), maxlength: 12, autocomplete: "off",
         });
         field.addEventListener("input", () => {
           localValues[key] = field.value.trim();
@@ -2715,7 +3345,35 @@
         });
         return el("label", { class: "debug-local" }, el("span", { text: (LOCAL[key] && LOCAL[key].label) || key }), field);
       }),
-      el("p", { class: "debug-note", text: "このPCのブラウザだけに記録します（公開ページには書かれません）。入力するとすぐに記録され、「記録（セーブ）を消す」でも消えません。遊ぶPC・遊ぶブラウザ（同じURL）で入れてください。空らんのときは、うすい字の呼び名で表示します。" }));
+      el("p", { class: "debug-note", text: "空らんのときは、うすい字の呼び名（data.js の SETTINGS の local の default）で表示します。ちがう呼び名にしたいときだけ入れてください。このPCのブラウザだけに記録し、「記録（セーブ）を消す」でも消えません。" }));
+  }
+
+  // プレゼントの場所（4-5 で、家全体の地図に星を出す場所）。地図をクリックして決める。このPCのブラウザだけに記録する
+  function presentTool() {
+    if (!HS) return el("p", { class: "debug-note", text: "（house.js を読み込めませんでした）" });
+    const box = el("div", { class: "debug-house" });
+    const note = el("p", { class: "debug-note" });
+    let hv = null;
+    const draw = () => {
+      if (hv) hv.stop();
+      const p = presentAt();
+      hv = renderHouse(box, { show: "all", home: "all", star: Boolean(p) }, { static: true, star: p ? { x: p.x + 0.5, y: p.y + 0.5 } : null });
+      note.textContent = p
+        ? `★の場所を記録しました（家全体の地図のマス ${p.x}, ${p.y}）。変えるときは、地図をもう一度クリックします。`
+        : "まだ決まっていません。プレゼントを隠す場所を、地図でクリックしてください。";
+    };
+    box.addEventListener("click", (e) => {
+      const c = hv && hv.cellAt(e.clientX, e.clientY);
+      if (!c) return;
+      localValues.presentAt = `${c.x},${c.y}`;
+      localStore.save(localValues);
+      draw();
+    });
+    draw();
+    return el("div", { class: "debug-kw debug-present" },
+      box, note,
+      el("button", { type: "button", text: "場所を消す", onclick: () => { delete localValues.presentAt; localStore.save(localValues); draw(); } }),
+      el("p", { class: "debug-note", text: "4-5 で星を出すのは、data.js の SETTINGS の presentOnMap が true のときだけです。このPCのブラウザだけに記録します（公開ページには書かれません）。遊ぶPC・遊ぶ開き方（直接開く／公開URL）で決めてください。" }));
   }
 
   // 氷の床の最短回数（自動で数えた回数と、data.js の best）
@@ -2730,23 +3388,30 @@
   }
 
   // 戦いの点検（コマンドの選び方を全部ためして、何ターンで勝てるか・負けるかを調べた結果）
+  //   仲間をえらぶ戦いは、えらび方ごとに1行。「攻撃だけ」は、全員がいちばん強い攻撃だけを選んだとき
   function battleTool() {
     const rows = [];
     for (const [sid, sc] of Object.entries(SCN)) {
       if (!sc || !sc.battle || !BT[sc.battle]) continue;
-      const conds = battleConds(BT[sc.battle]);
-      for (const flag of conds.length ? [false, true] : [false]) {
-        const r = battleCheck(sc.battle, () => flag);
-        const how = r.path.map((c) => fill((MV[c] && MV[c].name) || c)).join(" → ");
-        const when = conds.length ? `［${condLabel(conds)}が${flag ? "いる" : "いない"}とき］` : "";
+      for (const team of battleTeams(sc.battle)) {
+        const r = battleCheck(sc.battle, team);
+        const rate = battleRandom(sc.battle, team);
+        const how = r.path.map((picks) => picks.filter(Boolean).map((c) => fill((MV[c] && MV[c].name) || c)).join("・")).join(" → ");
+        const spam = !r.spam ? "決着がつかない" : r.spam.win ? `${r.spam.turn}ターンで勝つ` : `${r.spam.turn}ターン目に負ける`;
         rows.push(el("li", {
           class: r.win ? "" : "debug-error",
-          text: `${sid}（${sc.battle}）${when}：${r.win ? `最短${r.win}ターンで勝てる（${how}）` : "勝てない"}`
-            + `／${r.lose ? `最短${r.lose}ターンで負けることがある` : "負けることはない"}`,
+          text: `${sid}（${sc.battle}）${team.label ? `［${team.label}］` : ""}：`
+            + `${r.win ? `最短${r.win}ターンで勝てる` : "勝てない"}`
+            + `／攻撃だけだと${spam}／でたらめに選ぶと、15ターン以内に勝てるのは約${rate}%`,
+          title: how,
         }));
       }
     }
-    return rows.length ? el("ul", {}, rows) : el("p", { class: "debug-note", text: "（戦いの場面はありません）" });
+    return rows.length
+      ? el("div", {},
+        el("p", { class: "debug-note", text: "行にマウスを乗せると、最短で勝てる選び方が出ます（ターンごと、仲間の順）。" }),
+        el("ul", {}, rows))
+      : el("p", { class: "debug-note", text: "（戦いの場面はありません）" });
   }
 
   function setupDebug(problems) {
@@ -2776,8 +3441,10 @@
       el("div", { class: "debug-row" },
         el("button", { type: "button", text: "なかまと言葉を全部にする", onclick: () => { state.met = PARTY.slice(); state.words = PARTY.slice(); storage.save(state); updateParty(); toast("なかまと言葉を全部そろえました"); } }),
         el("button", { type: "button", text: "記録（セーブ）を消す", onclick: () => { storage.clear(); state = freshState(); updateParty(); toast("記録を消しました"); } })),
-      el("h4", { text: "遊ぶ前の準備（友達の呼び名。このPCだけに記録）" }),
+      el("h4", { text: "遊ぶ前の準備：友達の呼び名（ちがう呼び名にするときだけ。このPCだけに記録）" }),
       localTool(),
+      el("h4", { text: "遊ぶ前の準備：プレゼントの場所（4-5。このPCだけに記録）" }),
+      presentTool(),
       el("h4", { text: "答えを暗号にする（駅名など、ページに書きたくない答え用）" }),
       secretTool(),
       el("h4", { text: "表示用に隠す（駅名・公園名を、画面には出したいとき用）" }),
@@ -2804,10 +3471,10 @@
   // ==============================================================
   // 12. 操作（クリック・キーボード）
   // ==============================================================
-  novel.box.addEventListener("click", nvAdvance);
+  novel.box.addEventListener("click", () => nvAdvance("box"));
   novel.stage.addEventListener("click", (e) => {
     if (e.target.closest("button, input, form, a")) return;
-    nvAdvance();
+    nvAdvance("stage");
   });
   chat.log.addEventListener("click", () => { if (CV.skip) CV.skip(); });
   document.addEventListener("keydown", (e) => {
@@ -2826,7 +3493,7 @@
     if (e.key !== "Enter" && e.key !== " ") return;
     if (currentView === "novel") {
       e.preventDefault();
-      nvAdvance();
+      nvAdvance("key");
     } else if (currentView === "chat" && CV.skip) {
       e.preventDefault();
       CV.skip();

@@ -12,7 +12,7 @@
 //    "\n" と書くと、その位置で改行します。
 //    { } で囲んだ言葉は、ゲームが置きかえます。
 //      {name}    → 主人公の名前（1-1 のPC、2-4 のiPhoneで入力したもの）
-//      {friend1} → 友達の呼び名（遊ぶ前にPCで入れておく。SETTINGS の local）
+//      {friend1} → 友達の呼び名（SETTINGS の local。ふだんは default の呼び名）
 //      {station} → 鏡に書く駅名（SETTINGS の hidden から）
 //      {park}    → リーフィアのいる公園の名前（同上）
 //
@@ -40,9 +40,11 @@
 //    ice     : 氷の床のパズル（書き方は glaceon の場面を参照）
 //    walk    : 歩けるマップ（house.js の地図の名前）。人物と出来事は events に書く
 //              （書き方は sylveon の場面と README の「歩けるマップ」を参照）
-//    events  : 歩けるマップの人物・出入口と、そこで起きること（say・set・next）
+//    events  : 歩けるマップの人物・出入口と、そこで起きること（say・set・choices・next・need）
 //    start / goal / team : 歩き始める場所・画面に出す目的・集まった仲間の表示
 //    battle  : 戦い（下の BATTLES の名前）。会話のあとに戦いが始まり、勝つと next へ進む
+//    house   : 家全体の地図（house.js）を出す。lines に { house: { … } } と書くと、地図が変わる
+//              （書き方は espeon_map の場面と README の「家全体の地図」を参照）
 //    puzzle  : true で最後の謎の枠（下の PUZZLE）を表示する
 //    set     : 条件の名前を記録する（unset で消す）。選択肢にも書ける
 //    draft   : true にすると画面に「仮の内容」と表示（作りかけの目印）
@@ -76,17 +78,19 @@ const SETTINGS = {
 
   // ---- 当日の準備に合わせて切りかえる設定（true / false） ----
   useMirror: false,     // true：浴室の鏡に駅名を書く。false：鏡のそばのカードで代用する
-  presentOnMap: false,  // true：プレゼントを隠し、家の地図で光らせる（家全体の地図ができてから）
+  presentOnMap: false,  // true：プレゼントを隠し、家の地図に星を出す（4-5）。
+                        //       星の場所は、遊ぶPCで ?debug →🛠→「遊ぶ前の準備：プレゼントの場所」で決める
                         // false：家の人が手渡す（「メリークリスマス」が合図）
 
-  // ---- 遊ぶ前に、このPCで入れておく呼び名（公開ページには書かない） ----
-  //  ?debug を付けて開き、🛠 →「遊ぶ前の準備」で入力します（このPCのブラウザだけに記録）。
-  //  文章に {friend1} のように書くと、入れた呼び名に置きかわります。
-  //  入れていないときは、default の呼び名で表示します。
+  // ---- 友達の呼び名（1-3 の花畑の人間組） ----
+  //  文章に {friend1} のように書くと、この呼び名に置きかわります。
+  //  default は「表示用に隠す」形です（公開ページのコードに、呼び名がそのまま載らないように）。
+  //  作り方：?debug を付けて開き、🛠 →「表示用に隠す」に呼び名を入れる（README 4章）。
+  //  遊ぶPCで、ちがう呼び名にしたいときだけ、🛠 →「遊ぶ前の準備」で入れます（このPCだけに記録）。
   local: {
-    friend1: { label: "友達1（技：ピンポンアタック）", default: "ともだちA" },
-    friend2: { label: "友達2（技：ぶんぶんハローYouTube）", default: "ともだちB" },
-    friend3: { label: "友達3（技：ベンチホテル）", default: "ともだちC" },
+    friend1: { label: "友達1（技：ピンポンアタック）", default: "~hubwhuauh/DSgu7Z" },
+    friend2: { label: "友達2（技：ぶんぶんハローYouTube）", default: "~hubkhueGh/DIgu7W" },
+    friend3: { label: "友達3（技：ベンチホテル）", default: "~hub8hueHh/HB" },
   },
 
   // ---- 表示用に隠した文字（元に戻せる形） ----
@@ -138,14 +142,13 @@ const CHARACTERS = {
   clefairy:  { name: "ピッピ",     emoji: "🧚", color: "#f7b8cb", art: "clefairy" },
   axew:      { name: "キバゴ",     emoji: "🐲", color: "#b7d36a", art: "axew" },
 
-  // 1-3 の相手：いたずら雪だるま2体（名前は【仮】）
-  snowman1:  { name: "よろい雪だるま",   emoji: "⛄", color: "#bfe3f5" },  // 第1戦：氷のよろいを着ている
-  snowman2:  { name: "ころがり雪だるま", emoji: "☃️", color: "#e3ebf5" },  // 第2戦：転がって暴れる
+  // 1-3 の相手：いたずら雪だるま（1体）
+  snowman:   { name: "いたずら雪だるま", emoji: "⛄", color: "#bfe3f5" },
 
-  // 1-3 の人間組（息子さんの友達）。呼び名は SETTINGS の local（遊ぶ前にPCで入れる）
-  friend1:   { name: "{friend1}", emoji: "🧑", color: "#8fb4e8" },
-  friend2:   { name: "{friend2}", emoji: "🧑", color: "#eea98d" },
-  friend3:   { name: "{friend3}", emoji: "🧑", color: "#9fd6a2" },
+  // 1-3 の人間組（息子さんの友達）。呼び名は SETTINGS の local
+  friend1:   { name: "{friend1}", emoji: "🧑", color: "#8fb4e8" },   // 技：ピンポンアタック
+  friend2:   { name: "{friend2}", emoji: "🧑", color: "#eea98d" },   // 技：ぶんぶんハローYouTube
+  friend3:   { name: "{friend3}", emoji: "🧑", color: "#9fd6a2" },   // 技：ベンチホテル
 
   // 1-3 の花畑の住人（戦いのヒントをくれる）
   bee:       { name: "ミツバチ",     emoji: "🐝", color: "#f6d36b" },
@@ -303,10 +306,10 @@ const SCENES = {
 
   // ---- 1-3 ニンフィア（花畑：リビングの形） ----
   //  歩けるマップ（house.js の living）で、仲間を集める。
-  //  リザードン・ピッピ・友達の3組がそろってから、ニンフィアに話しかけると戦いになる。
-  //  キバゴは、仲間にしなくても先へ進める。
+  //  仲間にできるのは、リザードン・ピッピ・キバゴと、友達3人（ひとりずつ誘う）の6人。
+  //  3人以上が仲間になってから、ニンフィアに話しかけると戦いになる（need: 3）。
   //  ピッピは人見知り。一度かくれたあと、ニンフィアに頼むと、一緒に話しかけてくれる。
-  //  友達の呼び名（{friend1} など）は、遊ぶ前にPCで入れておく（SETTINGS の local）。
+  //  友達の呼び名（{friend1} など）は、SETTINGS の local。
   sylveon: {
     bg: "memory",
     meet: "sylveon",
@@ -318,34 +321,29 @@ const SCENES = {
       "一面の花畑に出た。ところどころ、花が白くこおりついている。",
       "花の香りの奥から、ぱたぱた走る音と、何かが転がる音が聞こえる。",
       "ニンフィア：いらっしゃい！　……と言いたいけど、今それどころじゃないの。",
-      "ニンフィア：いたずら雪だるまが2体も来て、花畑を半分こおらせちゃった。",
+      "ニンフィア：いたずら雪だるまが来て、花畑を半分こおらせちゃった。",
       "イーブイ：ひとりで追い返せないの？",
       "ニンフィア：うん、ひとりじゃ無理なの。",
       "ニンフィア：この花畑のどこかに、手を貸してくれそうな子がいるはず。一緒に探して！",
     ],
-    goal: "花畑で、手を貸してくれる仲間を探そう。",
-    // 集まった仲間（画面の横に出す）
+    goal: "花畑で、手を貸してくれる仲間を3人以上探そう。",
+    // 集まった仲間（画面の横に出す）。ニンフィアの need は、この人数で数える
     team: [
       { who: "charizard", if: "charizard" },
       { who: "clefairy", if: "clefairy" },
       { who: "axew", if: "axew" },
-      { who: ["friend1", "friend2", "friend3"], if: "friends" },
+      { who: "friend1", if: "friend1" },
+      { who: "friend2", if: "friend2" },
+      { who: "friend3", if: "friend3" },
     ],
     // 歩けるマップの出来事（くわしくは README の「歩けるマップ」）
     //   npc と at：人物と、その場所 [x, y]（話しかけると起きる）
     //   door：house.js の出入口の名前（通りぬけようとすると起きる）
-    //   同じ人物・出入口を何個も書いたときは、条件（if・unless）に合う最初のものが使われる
+    //   choices：セリフのあとの選択肢（next がなければ、返事のあと歩くのにもどる）
+    //   need：集まった仲間（team）が、その人数以上のときだけ起きる
+    //   同じ人物・出入口を何個も書いたときは、条件（if・unless・need）に合う最初のものが使われる
     events: [
-      // ニンフィア：仲間がそろったら、戦いが始まる。足りないときは、手がかりをくれる
-      {
-        npc: "sylveon", at: [6, 5], if: ["charizard", "clefairy", "friends"],
-        say: [
-          "ニンフィア：みんな、そろったね！",
-          "ニンフィア：あの子たちも来てくれたんだ。ときどき、ここへ遊びに来るの。",
-          "ニンフィア：じゃあ、雪だるまを追い返そう！",
-        ],
-        next: "sylveon_battle",
-      },
+      // ニンフィア：ピッピに頼まれたら、一緒に行く
       {
         npc: "sylveon", at: [6, 5], if: "clefairyShy", unless: ["clefairyAsk", "clefairy"],
         say: [
@@ -354,9 +352,25 @@ const SCENES = {
         ],
         set: "clefairyAsk",
       },
-      { npc: "sylveon", at: [6, 5], unless: "charizard", say: ["ニンフィア：日だまりのほうから、大きな寝息が聞こえるの。"] },
-      { npc: "sylveon", at: [6, 5], unless: "clefairy", say: ["ニンフィア：切り株のあたりに、だれかかくれてるみたい。"] },
-      { npc: "sylveon", at: [6, 5], unless: "friends", say: ["ニンフィア：大きな岩のほうから、にぎやかな声がするよ。"] },
+      // ニンフィア：仲間が3人以上そろったら、戦いに行くか聞く
+      {
+        npc: "sylveon", at: [6, 5], need: 3,
+        say: [
+          "ニンフィア：手伝ってくれる仲間が、そろったね！",
+          { if: "humans", text: "ニンフィア：あの子たちも来てくれたんだ。ときどき、ここへ遊びに来るの。" },
+          "ニンフィア：雪だるまを、追い返しに行く？",
+        ],
+        choices: [
+          { text: "行く", reply: "ニンフィア：よーし、行こう！", next: "sylveon_battle" },
+          { text: "もう少し仲間を探す", reply: "ニンフィア：分かった。準備ができたら、声をかけてね。" },
+        ],
+      },
+      // ニンフィア：仲間が足りないときは、手がかりをくれる（まだ仲間になっていない子の居場所）
+      { npc: "sylveon", at: [6, 5], unless: "charizard", say: ["ニンフィア：仲間は、3人はほしいな。", "ニンフィア：日だまりのほうから、大きな寝息が聞こえるの。"] },
+      { npc: "sylveon", at: [6, 5], unless: "clefairy", say: ["ニンフィア：仲間は、3人はほしいな。", "ニンフィア：切り株のあたりに、だれかかくれてるみたい。"] },
+      { npc: "sylveon", at: [6, 5], unless: "humans", say: ["ニンフィア：仲間は、3人はほしいな。", "ニンフィア：大きな岩のほうから、にぎやかな声がするよ。"] },
+      { npc: "sylveon", at: [6, 5], unless: "axew", say: ["ニンフィア：仲間は、3人はほしいな。", "ニンフィア：氷のかたまりのほうで、カリカリ音がするの。"] },
+      { npc: "sylveon", at: [6, 5], say: ["ニンフィア：仲間は、3人はほしいな。", "ニンフィア：大きな岩のそばの子たちに、もう一度声をかけてみたら？"] },
 
       // リザードン（日だまりで昼寝）
       {
@@ -393,7 +407,7 @@ const SCENES = {
         set: "clefairyShy",
       },
 
-      // キバゴ（氷のかたまりのそば）。仲間にしなくても先へ進める
+      // キバゴ（氷のかたまりのそば）
       {
         npc: "axew", at: [1, 0], unless: "axew",
         say: [
@@ -407,24 +421,55 @@ const SCENES = {
         set: "axew",
       },
 
-      // 友達（人間組）。平たい大岩のそばで遊んでいる。3人のだれに話しかけてもよい
+      // 友達（人間組）。平たい大岩のそばで遊んでいる。ひとりずつ、仲間に誘う
+      //   はじめて話しかけたときだけ、イーブイがおどろく（humans を記録）
+      //   「いいえ」などを選んだときは、仲間にならない。もう一度話しかければ、また誘える
+      //   3人とも、ひとりずつ話しかけられる場所に立たせている（[12, 1] は空けておく）
       {
-        npc: ["friend1", "friend2", "friend3"], at: [[12, 0], [12, 1], [13, 1]], unless: "friends",
+        npc: "friend1", at: [12, 0], unless: "friend1",
         say: [
-          "人間の子が3人、平たい大岩のまわりで遊んでいる。",
-          "イーブイ：また人間だ！　しかも3人も……。",
-          "{friend1}：あれ？　{name}じゃん！",
-          "{friend2}：雪だるま退治？　おもしろそう！",
-          "{friend3}：手伝うよ！",
-          "{friend1}たちが仲間になった！",
+          { unless: "humans", text: "人間の子が3人、平たい大岩のまわりで遊んでいる。" },
+          { unless: "humans", text: "イーブイ：また人間だ！　しかも3人も……。" },
+          "{friend1}：一緒に遊ぼうぜ",
         ],
-        set: "friends",
+        set: "humans",
+        choices: [
+          { text: "はい", reply: ["{friend1}：第4公園集合で", "{friend1}が仲間になった！"], set: "friend1" },
+          { text: "いいえ", reply: "{friend1}：えー、つまんねーの。" },
+        ],
+      },
+      {
+        npc: "friend2", at: [13, 3], unless: "friend2",
+        say: [
+          { unless: "humans", text: "人間の子が3人、平たい大岩のまわりで遊んでいる。" },
+          { unless: "humans", text: "イーブイ：また人間だ！　しかも3人も……。" },
+          "イーブイ：雪だるまが、花畑をこおらせちゃったんだ。",
+          "{friend2}：ゆるせる？",
+        ],
+        set: "humans",
+        choices: [
+          { text: "はい", reply: "{friend2}：え、ゆるせちゃうの？　やさしいなあ。" },
+          { text: "いいえ", reply: ["{friend2}：ゆるせんのぉ、ゆるせんのぉ", "{friend2}が仲間になった！"], set: "friend2" },
+        ],
+      },
+      {
+        npc: "friend3", at: [13, 1], unless: "friend3",
+        say: [
+          { unless: "humans", text: "人間の子が3人、平たい大岩のまわりで遊んでいる。" },
+          { unless: "humans", text: "イーブイ：また人間だ！　しかも3人も……。" },
+          "{friend3}：野宿する？",
+        ],
+        set: "humans",
+        choices: [
+          { text: "はい", reply: ["{friend3}：野宿確定", "{friend3}が仲間になった！"], set: "friend3" },
+          { text: "いいえ", reply: "{friend3}：そっかー。気が向いたら言ってね。" },
+        ],
       },
 
       // 花畑の住人（任意。戦いのヒントをくれる）
-      { npc: "bee", at: [7, 4], say: ["ミツバチ：雪だるまのよろいは、熱に弱いらしいよ。"] },
-      { npc: "ladybug", at: [0, 6], say: ["テントウムシ：ふぶきの後は、だれかに元気をもらうといいよ。"] },
-      { npc: "butterfly", at: [13, 6], say: ["チョウチョ：転がり出したら、何かでつかまえないと止まらないよ。"] },
+      { npc: "bee", at: [7, 4], say: ["ミツバチ：雪だるまは、ほのおに弱いらしいよ。"] },
+      { npc: "ladybug", at: [0, 6], say: ["テントウムシ：雪だるまが大きく息をすいこんだら、ふぶきが来る合図だよ。"] },
+      { npc: "butterfly", at: [13, 6], say: ["チョウチョ：ふぶきの日は、かまくらの中なら平気なんだって。"] },
 
       // 出入口
       { door: "path", say: ["門が、白くこおりついている。押しても開かない。", "イーブイ：雪だるまのしわざかな……。"] },
@@ -432,58 +477,19 @@ const SCENES = {
     ],
   },
 
-  // ---- 1-3 の戦い（作る順番4）：2組で、1組ずつ順番に戦う ----
-  //  第1戦（ポケモン組）→ 第2戦（人間組）→ 決め技（2組そろって）。
-  //  戦いの決まり・技・数値・戦いの中のセリフは、下の BATTLES と MOVES に書いている。
+  // ---- 1-3 の戦い：いたずら雪だるま（1戦だけ） ----
+  //  主人公と、集めた仲間から3人をえらんで戦う（仲間が3人だけなら、えらばずに始まる）。
+  //  全員のコマンドを、毎ターン選ぶ。戦いの決まり・技・数値・セリフは、下の BATTLES と MOVES に書いている。
   //  battle を書いた場面は、会話（lines）のあとに戦いが始まり、勝つと next の場面へ進む。
   sylveon_battle: {
     bg: "memory",
-    show: ["snowman1", "snowman2", "sylveon"],
+    battle: "snowman",
     lines: [
-      "そのとき、花畑の向こうから、雪だるまが2体転がってきた！",
-      "よろい雪だるま：ゆきだるまは、ころがるのが仕事！",
-      "ころがり雪だるま：花も道も、ぜーんぶ真っ白にしてやる！",
-      "1体は、氷のよろいを着ている。もう1体は、転がったまま止まらない。",
-      "ニンフィア：2体いっぺんは無理……。1体ずつ、順番に戦おう！",
-      "ニンフィア：まずはポケモンのみんな、よろいの雪だるまをお願い！",
-    ],
-    next: "sylveon_battle1",
-  },
-
-  // 第1戦：ポケモン組（操作するのはイーブイ）
-  sylveon_battle1: {
-    bg: "memory",
-    battle: "snowman1",
-    lines: [
-      "よろい雪だるまが、立ちはだかった！",
-      "イーブイ：{name}、ぼくの動きを決めて！　みんなは、それぞれ自分で動くよ。",
-    ],
-    next: "sylveon_battle2",
-  },
-
-  // 第2戦：人間組（操作するのは主人公）
-  sylveon_battle2: {
-    bg: "memory",
-    battle: "snowman2",
-    lines: [
-      "ころがり雪だるま：よくも、よろいをとかしたな！",
-      "ころがり雪だるま：いくぞー！　ころころ、どーん！",
-      "ころがり雪だるまが、すごいいきおいで転がってきた！",
-      "{friend1}：次は、こっちの番だ！",
-      "{friend2}：人間組、いくよ！",
-      "イーブイ：{name}、みんなをお願い！",
-    ],
-    next: "sylveon_finale",
-  },
-
-  // 決め技：2組そろって（ニンフィアのリボンが2組をつなぐ）
-  sylveon_finale: {
-    bg: "memory",
-    battle: "finale",
-    lines: [
-      "ニンフィア：止まった！　今だよ。みんな、力を合わせよう！",
-      "よろい雪だるま：こうなったら、2体で花畑ごとこおらせてやる！",
-      "ニンフィア：ポケモン組と人間組、どっちの力もいるの！",
+      "そのとき、花畑の向こうから、大きな雪だるまが転がってきた！",
+      "いたずら雪だるま：ゆきだるまは、ころがるのが仕事！",
+      "いたずら雪だるま：花も道も、ぜーんぶ真っ白にしてやる！",
+      "ニンフィア：来た！　みんな、力を合わせよう！",
+      "イーブイ：ぼくとニンフィアは、うしろで応援してる！　{name}、みんなの動きを決めて！",
     ],
     next: "sylveon_win",
   },
@@ -492,7 +498,7 @@ const SCENES = {
     bg: "memory",
     give: "sylveon",
     lines: [
-      "雪だるまたちは、ころころと転がって、花畑から出ていった。",
+      "いたずら雪だるまは、ころころと転がって、花畑から出ていった。",
       "ニンフィア：やったあ！　ね、ひとりじゃ無理でも、みんなとならできたでしょ？",
       "ニンフィア：わたしは、だれかと一緒にいる時間が大好き。",
       "ニンフィア：笑い声が重なると、うれしさも倍になるの。",
@@ -938,28 +944,43 @@ const SCENES = {
     },
   },
 
-  // ★ 地図が広がる演出は、あとで作る（今は文章だけ）
+  // ★ 地図が広がる演出（作る順番5）
+  //  家全体の地図（house.js）を出し、lines の { house: { … } } の行で、地図を変えていく。
+  //    show：見せる部屋（house.js の地図の名前。"all" で全部）。はじめは夢の見た目で現れる
+  //    home：本当の家具の見た目に変える部屋 / marks：会った仲間の印 / fog：家の外の霧
+  //  PCはiPhoneでの進み具合を知らないので、駅名を入れた時点で、一気に家全体まで広げる（設計書 第6節）
   espeon_map: {
     bg: "dream",
     // PCとiPhoneの記録は別々なので、iPhoneで会った仲間と言葉を、ここで引きつぐ
     meet: ["glaceon", "sylveon", "espeon", "umbreon", "vaporeon", "flareon"],
     give: ["glaceon", "sylveon", "espeon", "umbreon", "vaporeon", "flareon"],
+    set: "houseMap",                   // これ以降、メニューの地図が「家の地図」になる
+    house: { show: ["dream"] },        // はじめは夢の部屋だけ（ほかは霧の中）
     lines: [
       "エーフィ：その名前……。待って、そちらへ力を伸ばしてみる。",
+      { house: { show: ["path", "living"] } },
       "夢の部屋の地図が、リビングへ広がっていく。",
+      { house: { home: ["path", "living"] } },
       "花畑の景色が、すうっと家具の形に変わった。",
       // 組み合わせは、house.js の花畑（living）の置きかえ（倒木→ソファ、切り株→テーブルなど）に合わせる
       "イーブイ：えっ……倒木はソファで、切り株はテーブルだったんだ！",
       "イーブイ：ニンフィアの花畑は、{name}の家のリビングだったんだ……！",
-      // 友達が花畑に出てくるようになったら（作り直しで set: "friends" を記録する）、この行も出る
-      { if: "friends", text: "イーブイ：花畑に友達がいたのも、ここが{name}たちの遊び場だったからなんだ！" },
-      "地図は、和室と洋室、小道と森へも広がった。どれも、本当の形に変わっていく。",
+      // 花畑で友達に話しかけていたら（humans を記録）、この行も出る
+      { if: "humans", text: "イーブイ：花畑に友達がいたのも、ここが{name}たちの遊び場だったからなんだ！" },
+      { house: { show: ["washitsu", "plaza", "forest"] } },
+      "地図は、和室と洋室、ベランダへも広がった。",
+      { house: { home: ["washitsu", "plaza", "forest"] } },
+      "どれも、本当の形に変わっていく。",
       // 1-1 の森はベランダ、小道はろうか（10/25 決定）。だから「全部」
       "イーブイ：はじまりの森も、氷の洞窟も、光の広場も……。",
       "イーブイ：全部、{name}の家だったんだ！",
       "イーブイ：エーフィが言ってた「別の景色」って、このことだったんだ。",
-      "地図は台所と浴室まで広がり、家全体の間取りができあがった。",
+      { house: { show: "all" } },
+      // 台所はリビングといっしょに出ているので、ここで広がるのは浴室・トイレ・物入れ
+      "地図は浴室まで広がり、家全体の間取りができあがった。",
+      { house: { marks: true } },
       "会った仲間の場所に、仲間の印が光っている。",
+      { house: { fog: true } },
       "家の壁の外は、白い霧に包まれて何も見えない。",
       "イーブイ：わあ……家の中が全部見える！　でも、その先は真っ白だ。",
       "エーフィ：……だめ。わたしの力は、この家の中までしか届かない。",
@@ -976,6 +997,7 @@ const SCENES = {
 
   espeon_map_2: {
     bg: "dream",
+    house: { show: "all", home: "all", marks: true, fog: true },   // 家全体の地図を出したまま
     lines: [
       "イーブイ：そうか！　ブラッキーが言ってた。あの窓は、どこへでも行けるって！",
       "エーフィ：外では、わたしは何も手伝えない。",
@@ -990,6 +1012,7 @@ const SCENES = {
       icon: "📱",
       title: "スマホで、合言葉「まどのそと」を入れよう",
       text: "スマホのイーブイたちと、窓の外へ。\n家に帰ってきたら、ここでエーフィに声をかけよう。",
+      map: true,                        // 家の地図を見るボタン
       next: "pc_wait_home",
       nextLabel: "家に帰ってきた",
     },
@@ -1188,6 +1211,7 @@ const SCENES = {
     // 途中の場面から始めても、8つの言葉がそろうようにする
     meet: ["glaceon", "sylveon", "espeon", "umbreon", "vaporeon", "flareon", "jolteon", "leafeon"],
     give: ["glaceon", "sylveon", "espeon", "umbreon", "vaporeon", "flareon", "jolteon", "leafeon"],
+    set: "houseMap",   // 合言葉「ただいま」から始めても、メニューに家の地図を出す
     lines: [
       "イーブイ：ただいま！　……って、一度言ってみたかったんだ。",
       "エーフィ：おかえりなさい。サンダースとリーフィアも一緒ね。みんな、無事でよかった。",
@@ -1227,12 +1251,14 @@ const SCENES = {
     },
   },
 
-  // ---- 4-3 8匹が集まる ----
-  // ★ 夢の部屋の地図に光が集まる演出は、あとで作る（今は8匹を順番に表示）
+  // ---- 4-3 8匹が集まる（作る順番5） ----
+  //  夢の部屋の地図に光が集まり、話した順に、仲間が1匹ずつ地図の上に現れる（house の appear）
+  //  イーブイは、はじめから部屋のまんなかにいる（tokens）
   final_gather: {
     bg: "dream",
-    show: ["eevee", "glaceon", "sylveon", "espeon", "umbreon", "vaporeon", "flareon", "jolteon", "leafeon"],
+    house: { show: ["dream"], tokens: ["eevee"], appear: true },
     lines: [
+      { house: { light: true } },
       "言葉を入れると、夢の部屋に光が集まってきた。",
       "光の中から、ひとり、またひとりと、仲間が現れる。",
       "エーフィ：ブラッキー、おかえりなさい。",
@@ -1284,13 +1310,18 @@ const SCENES = {
 
   // ---- 4-5 プレゼント ----
   //  SETTINGS の presentOnMap で、「地図で光らせる」と「家の人が手渡す」を切りかえる
+  //  地図で光らせるときは、家全体の地図を出して、プレゼントの場所に星を出す（作る順番5）
+  //  星の場所は、遊ぶPCで決めておく（?debug →🛠→「遊ぶ前の準備：プレゼントの場所」）
   final_present: {
     show: ["eevee", "glaceon", "sylveon", "espeon", "umbreon", "vaporeon", "flareon", "jolteon", "leafeon"],
+    set: "presentShown",   // メニューの家の地図にも、星を出す（presentOnMap のときだけ）
     lines: [
       "イーブイ：{name}、ここまで一緒に来てくれて、ありがとう。",
       "ニンフィア：みんなで、お礼を用意したの！",
-      // 地図で光らせる場合（家全体の地図ができてから使う）
+      // 地図で光らせる場合
+      { if: "presentOnMap", house: { show: "all", home: "all", marks: true, fog: true } },
       { if: "presentOnMap", text: "エーフィ：家の地図を見て。わたしの力で、置いた場所に印をつけておいたわ。" },
+      { if: "presentOnMap", house: { star: true } },
       { if: "presentOnMap", text: "家の地図の一か所が、星のように光った。" },
       { if: "presentOnMap", text: "イーブイ：光っている場所を、探してみて！　地図があれば、きっと見つかるよ。" },
       // 家の人が手渡す場合
@@ -1324,225 +1355,137 @@ const SCENES = {
 
 
 // ---------------- 戦い（1-3 ニンフィアの花畑） ----------------
-//  ドラクエ風の選択式バトルです（設計書 第5節）。
+//  ドラクエ風の選択式バトルです（設計書 第5節を、10/28 の依頼で1戦に作り直しました）。
 //  場面に battle: "戦いの名前" と書くと、会話のあとに戦いが始まり、勝つと next の場面へ進みます。
 //
 //  【決まり】
-//    ・操作するのは、各組の1人（leader）だけ。毎ターン、コマンド（commands）から選ぶ。
-//    ・ほかの仲間は、さくせん（tactics）のとおりに自動で動く。
-//    ・動く順番：leader → party の上から順 → 雪だるま（元にもどる → 攻撃 → ふぶき）
-//    ・ハートは組で共通（hearts）。0 になったら負け。
-//      負けたら、ニンフィアのヒント（lose）を聞いて、その戦いの最初からやり直す。
-//    ・雪だるまの「ゲージ」（よろい・いきおい）を 0 にしたら勝ち。
+//    ・主人公（leader）と、仲間になった人から choose 人をえらんで戦う（仲間が choose 人だけなら、えらばない）。
+//    ・毎ターン、戦う仲間それぞれのコマンド（commands）を選ぶ。選び終わると、party の上から順に動く。
+//    ・相手は、actions を上から順にくり返す（ターンの終わりに動く）。
+//    ・ハートは、みんなで共通（hearts）。0 になったら負け。
+//      負けたら、ニンフィアのヒント（lose）を聞いて、その戦いの最初からやり直す（仲間も、えらび直せる）。
+//    ・相手のハート（enemy の hearts）を 0 にしたら勝ち。
 //    ・数値は固定で、乱数は使わない（同じ選び方をすれば、いつも同じ結果になる）。
 //
 //  ※【仮】の数値・技・セリフは、あとで差し替えてかまいません。
-//    変えたら ?debug の 🛠 で「戦いの点検」を見て、勝てなくなっていないか確かめてください
-//    （何ターンで勝てるか、何ターンで負けるかを、自動で調べて表示します）。
+//    変えたら ?debug の 🛠 で「戦いの点検」を見てください。仲間のえらび方ごとに、
+//    何ターンで勝てるか・攻撃だけだとどうなるか・でたらめに選ぶと何%勝てるかを、自動で調べて表示します。
 //
 //  【書き方】
 //    title    : 画面の左上に出す名前
-//    hearts   : ハートの数（組で共通）。0 にすると、ハートを使わない（決め技）
-//    leader   : 操作するキャラ（CHARACTERS の名前）
-//    commands : 操作するキャラのコマンド（下の MOVES の名前）
-//    party    : 一緒に戦う仲間（上から順に動く）。leader を書いた場所に leader を並べる
-//               { who: 仲間, tactics: さくせん, if: 条件 }
-//               "sylveon" のように名前だけ書くと、並ぶだけで動かない
+//    hearts   : みんなのハートの数
+//    leader   : かならず戦うキャラ（主人公）
+//    choose   : leader のほかに、戦う仲間を何人えらぶか（仲間になった人から）
+//    party    : 戦う仲間の候補（上から順に動く）
+//               { who: 仲間, commands: [技, …], if: 仲間になった印（set で記録した名前） }
+//               commands のかわりに tactics（さくせん）を書くと、自動で動く（下の tactics）
 //    tactics  : さくせん。上から順に調べて、条件に合った最初の技を使う
 //               { move: "bench", hearts: 2 }    … ハートが 2 以下のとき
 //               { move: "hello", cheer: false }  … 力アップが切れているとき
-//               { move: "pingpong" }             … 条件なし（いつでも）。"pingpong" とだけ書いてもよい
-//    enemy    : 雪だるま
-//      who      : CHARACTERS の名前（2体なら [ ] で囲む）
-//      gauge    : ゲージの名前（0 にすると勝ち）。icon はゲージの印、max はゲージの大きさ
-//      weak     : ゲージを減らせる技のタイプ（MOVES の type）。ほかの技は、はね返される
-//      regen    : true なら、減らしきれなかったゲージが、ターンの終わりに元にもどる
-//      damage   : 雪だるまの攻撃で、毎ターン減るハートの数（0 なら攻撃しない）
-//      blizzard : 何ターンに1回、ふぶきが来るか（ハート−1。0 なら来ない）
-//      bounce / hit / hitSay / regenText / attackText / blizzardText / break :
-//                 はね返されたとき・ゲージが減ったとき（hitSay は最初の1回だけ）・
-//                 元にもどったとき・攻撃・ふぶき・ゲージが 0 になったとき の文
-//    hints    : 戦っている間のヒント。turn ターン目の始めに出す
-//               （最後のヒントは、そのあとも2ターンごとにくり返す）
+//    enemy    : 相手
+//      who      : CHARACTERS の名前
+//      hearts   : 相手のハート
+//      weak     : 2倍効く技のタイプ（MOVES の type）
+//      actions  : 相手の行動（ターンごとに、上から順にくり返す）
+//                 text：行動の文 / damage：減るハートの数 / big：true なら「防ぐ」技（guard）で防げる大技 /
+//                 heal：相手のハートがもどる数 / blocked：防いだときの文 / after：行動のあとの文（次の予告など）/
+//                 alert：この行動をするターンに、画面の上に出す予告
+//      hitSay   : 初めてハートが減ったときのセリフ / break：ハートが 0 になったときの文
+//      label / icon : 相手のハートの見出し（書かなければ「ハート」）／ハートの印（書かなければ ♥）
+//    hints    : 戦っている間のヒント。turn ターン目の始めに出す（最後のヒントは、そのあとも2ターンごとにくり返す）
 //    lose     : 負けたときのヒント（負けるたびに1つずつ。最後のものは何度でも）
 //    skip     : after 回負けると出す、あきらめるボタン（氷の床の skip と同じ書き方）
 //
-//  ※ 文の中の {who} は技を使った人、{name} などは、いつもどおり置きかわります。
+//  ※ 文の中の {who} は技を使った人、{enemy} は相手、{name} などは、いつもどおり置きかわります。
 
 // 技（わざ）。BATTLES の commands と tactics から使います
 //    name  : 技の名前（コマンドのボタンにも出る）
 //    kind  : 技の種類
-//            "attack" … 雪だるまのゲージを power だけ減らす（type が雪だるまの weak にあるときだけ）
+//            "attack" … 相手のハートを power だけ減らす（hits 回当たる。type が相手の weak なら2倍）
+//            "heal"   … みんなのハートを power だけふやす（hearts の数まで）
+//            "cheer"  … みんなの攻撃を +power にする（turns ターンのあいだ）
+//            "guard"  … このターンの、相手の大技（actions の big）を防ぐ。all: true なら、すべて防ぐ
+//            "charge" … 次のターン、その仲間の攻撃が power 倍になる（攻撃以外をすると、消える）
 //            "help"   … 次に動く仲間の技を power 倍にする（てだすけ）
-//            "cheer"  … 組の全員の攻撃を +power にする（turns ターンのあいだ）
-//            "heal"   … ハートを power だけふやす（hearts の数まで）
-//    type  : 攻撃のタイプ（雪だるまの weak と比べる）
-//    note  : コマンドのボタンに出す、短い説明（操作するキャラの技だけ）
+//    type  : 攻撃のタイプ（相手の weak と比べる）
+//    note  : コマンドのボタンに出す、短い説明
 //    text  : 技を使ったときの文（書かなければ「〇〇の 技の名前！」）
 //    say   : 技を使ったときに続けて出す文（なくてもよい）
-//    bounce: はね返されたときの文（書かなければ、雪だるまの bounce）
-//    ribbon: true にすると、技を使ったときに、仲間の列をリボンでつないで見せる
 const MOVES = {
-  // ---- ポケモン組 ----
-  tackle:    { name: "たいあたり", kind: "attack", power: 1, type: "body", note: "体ごとぶつかって攻撃する" },
-  help:      { name: "てだすけ", kind: "help", power: 2, note: "次に動く仲間の技が、2倍になる" },
-  fire:      { name: "ほのお", kind: "attack", power: 1, type: "fire" },
-  moonlight: { name: "月の光", kind: "heal", power: 1 },
-  pound:     { name: "はたく", kind: "attack", power: 1, type: "body" },
-  scratch:   { name: "ひっかく", kind: "attack", power: 1, type: "body" },   // キバゴの技【仮】
+  // ---- 主人公 ----
+  snowball:  { name: "雪玉を投げる", kind: "attack", power: 1, type: "snow", text: "{who}は、雪玉を投げた！", note: "1ダメージ" },
+  kamakura:  {
+    name: "かまくらを作る", kind: "guard",
+    text: "{who}は、みんなで かまくらを作った！", say: ["これで、ふぶきが来ても大丈夫！"],
+    note: "このターンのふぶきを防ぐ（雪玉は防げない）",
+  },
 
-  // ---- 人間組（友達の技は、設計書のとおり） ----
-  snowball:  { name: "雪玉を投げる", kind: "attack", power: 1, type: "body", text: "{who}は、雪玉を投げた！", note: "雪玉を投げて攻撃する" },
-  catch:     { name: "つかまえる", kind: "attack", power: 1, type: "catch", text: "{who}は、雪だるまに飛びついた！", note: "飛びついて、転がるのを止める" },
-  pingpong:  { name: "ピンポンアタック", kind: "attack", power: 1, type: "ball" },
-  hello:     { name: "ぶんぶんハローYouTube", kind: "cheer", power: 1, turns: 2 },
-  bench:     { name: "ベンチホテル", kind: "heal", power: 1 },
+  // ---- ポケモン（部屋にあるぬいぐるみと同じ3匹） ----
+  fire:        { name: "ほのお", kind: "attack", power: 1, type: "fire", note: "雪だるまには2倍効く（2ダメージ）" },
+  warm:        { name: "あたためる", kind: "heal", power: 1, text: "{who}の炎で、みんなの体が温まった！", note: "ハートを1つ回復" },
+  pound:       { name: "はたく", kind: "attack", power: 1, type: "body", note: "1ダメージ" },
+  moonlight:   { name: "月の光", kind: "heal", power: 2, note: "ハートを2つ回復" },
+  scratch:     { name: "ひっかく", kind: "attack", power: 1, type: "body", note: "1ダメージ" },
+  dragondance: { name: "りゅうのまい", kind: "charge", power: 3, text: "{who}は、りゅうのまいを おどった！", note: "次のターンの攻撃が3倍" },
 
-  // ---- 決め技（2組そろって） ----
-  together: {
-    name: "みんなでいっせいに", kind: "attack", power: 1, type: "together", ribbon: true,
-    note: "全員の力を、ひとつに合わせる",
-    text: "{who}の合図で、みんながいっせいに動いた！",
-    say: [
-      "ニンフィアのリボンが、ふたつの組をつないだ！",
-      "リザードン：おう！",
-      "ピッピ：ピィー！",
-      { if: "axew", text: "キバゴ：キバー！" },
-      "{friend1}：いくぞ！",
-      "ニンフィア：せーのっ！",
-    ],
-  },
-  alone: {
-    name: "ひとりで立ち向かう", kind: "attack", power: 1, type: "body",
-    note: "自分ひとりで、2体に向かっていく",
-    text: "{who}は、ひとりで立ち向かった！",
-    bounce: ["2体の雪だるまに、押し返された！", "ニンフィア：ひとりじゃ無理だよ。みんなの力を合わせよう！"],
-  },
-  leave: {
-    name: "ニンフィアにまかせる", kind: "attack", power: 1, type: "ribbon",
-    note: "ニンフィアのリボンに、まかせる",
-    text: "{who}は、ニンフィアにまかせた！",
-    bounce: ["ニンフィアのリボンが、はね返された！", "ニンフィア：わたしひとりじゃ、無理……！"],
-  },
+  // ---- 友達（技の名前は、設計書のとおり） ----
+  pingpong:  { name: "ピンポンアタック", kind: "attack", power: 1, hits: 2, type: "ball", note: "2回当たる（2ダメージ）" },
+  hello:     { name: "ぶんぶんハローYouTube", kind: "cheer", power: 1, turns: 2, note: "2ターンのあいだ、みんなの攻撃が+1" },
+  bench:     { name: "ベンチホテル", kind: "heal", power: 3, text: "{who}の ベンチホテル！　みんなで、ベンチでひと休みした。", note: "ハートを3つ回復" },
 };
 
 const BATTLES = {
-  // ---- 第1戦：ポケモン組 × よろい雪だるま（旧案の段階1） ----
-  //  氷のよろいは、ほのお2回分でとける。1回分だけだと、ターンの終わりに固め直されてしまう。
-  //  イーブイの「てだすけ」で、リザードンの ほのおを2倍にすると、一度にとける。【仮】
-  //  ピッピの月の光（ハートが2以下のとき）があるので、この戦いでは負けない。
-  snowman1: {
-    title: "第1戦　ポケモン組",
-    hearts: 3,
-    leader: "eevee",
-    commands: ["tackle", "help"],
-    party: [
-      { who: "eevee" },
-      { who: "charizard", tactics: "fire" },                                              // 毎ターン ほのお【仮】
-      { who: "clefairy", tactics: [{ move: "moonlight", hearts: 2 }, { move: "pound" }] }, // ハートが2以下なら月の光【仮】
-      { who: "axew", if: "axew", tactics: "scratch" },                                     // 仲間にしたときだけ【仮】
-    ],
-    enemy: {
-      who: "snowman1",
-      gauge: "よろい", icon: "🧊", max: 2,
-      weak: ["fire"],
-      regen: true,
-      damage: 0,
-      blizzard: 2,   // 2ターンに1回ふぶき【仮】
-      bounce: "氷のよろいに、はね返された！",
-      hit: "よろいが、少しとけた！",
-      hitSay: [
-        "リザードン：炎は通った。もう少しだ！",
-        "よろい雪だるま：あつっ！　でも、まだよろいが残ってるぞ！",
-      ],
-      regenText: "よろい雪だるまは、とけたよろいを固め直した！",
-      blizzardText: "よろい雪だるまの ふぶき！",
-      break: [
-        "氷のよろいが、すっかりとけた！",
-        "よろい雪だるま：あつつつ……！　よろいが……！",
-        "ニンフィア：やった！　よろいがなくなった！",
-      ],
-    },
-    hints: [
-      { turn: 3, say: ["ニンフィア：炎は効いてる！　でも、とけきる前に固められちゃう……。"] },
-      { turn: 5, say: ["ニンフィア：リザードンの炎を、一度に強くできたら……。", "ニンフィア：イーブイの「てだすけ」は、どうかな？"] },
-    ],
-  },
-
-  // ---- 第2戦：人間組 × ころがり雪だるま（旧案の段階2） ----
-  //  転がっているあいだは、攻撃が当たらない。つかまえて止めるしかない（いきおい2）。
-  //  ひとりの力（1）では止めきれず、ターンの終わりに、また転がりだす。
-  //  友達2の ぶんぶんハローYouTube で力が上がっているあいだ（+1）に、つかまえると止まる。【仮】
-  //  転がる体当たりで毎ターン ハート−1。2ターン目か4ターン目につかまえないと、負ける。
-  snowman2: {
-    title: "第2戦　人間組",
-    hearts: 3,
+  // ---- いたずら雪だるま（1戦だけ。10/28 に作り直し）【仮】 ----
+  //  雪玉（ハート−2）のあと、大きく息をすいこみ、次のターンに ふぶき（ハート−6）。これをくり返す。
+  //  ふぶきは、主人公の「かまくらを作る」で防げる。防がないと、ハート6つでも負ける。
+  //  相手のハートは13。全員が攻撃だけをすると、どの3人をえらんでも、2ターン目のふぶきで負ける。
+  //  （10〜12だと、リザードンと友達1（ピンポンアタック）の組で、攻撃だけでも、ふぶきの前に勝ててしまうため）
+  snowman: {
+    title: "VS いたずら雪だるま",
+    hearts: 6,
     leader: "hero",
-    commands: ["snowball", "catch"],
+    choose: 3,
     party: [
-      { who: "hero" },
-      { who: "friend1", tactics: "pingpong" },                                             // 毎ターン
-      { who: "friend2", tactics: [{ move: "hello", cheer: false }, { move: "snowball" }] }, // 力アップが切れているとき
-      { who: "friend3", tactics: [{ move: "bench", hearts: 2 }, { move: "snowball" }] },    // ハートが2以下のとき
+      { who: "hero", commands: ["snowball", "kamakura"] },
+      { who: "friend1", if: "friend1", commands: ["pingpong", "snowball"] },
+      { who: "friend2", if: "friend2", commands: ["hello", "snowball"] },
+      { who: "friend3", if: "friend3", commands: ["bench", "snowball"] },
+      { who: "charizard", if: "charizard", commands: ["fire", "warm"] },
+      { who: "clefairy", if: "clefairy", commands: ["pound", "moonlight"] },
+      { who: "axew", if: "axew", commands: ["scratch", "dragondance"] },
     ],
     enemy: {
-      who: "snowman2",
-      gauge: "いきおい", icon: "🌀", max: 2,
-      weak: ["catch"],
-      regen: true,
-      damage: 1,     // 転がる体当たりで、毎ターン ハート−1
-      blizzard: 2,   // 2ターンに1回ふぶき【仮】
-      bounce: "転がるいきおいで、はじき飛ばされた！",
-      hit: "いきおいが、少し弱まった！",
-      hitSay: ["{friend3}：ひとりの力じゃ、止めきれないよ！"],
-      regenText: "ころがり雪だるまは、また転がりだした！",
-      attackText: "ころがり雪だるまの 体当たり！",
-      blizzardText: "ころがり雪だるまの ふぶき！",
+      who: "snowman",
+      hearts: 13,
+      weak: ["fire"],
+      actions: [
+        { text: "いたずら雪だるまの 雪玉！", damage: 2, after: ["いたずら雪だるまは、大きく息をすいこんだ……！"] },
+        {
+          text: "いたずら雪だるまの ふぶき！", damage: 6, big: true,
+          alert: "❄ このターンの終わりに、ふぶきが来る！",
+          blocked: "かまくらが、ふぶきを防いだ！",
+        },
+      ],
+      hitSay: ["いたずら雪だるま：いたたっ！　でも、まだまだ！"],
       break: [
-        "{name}が、ころがり雪だるまを がっちりつかまえた！",
-        "ころがり雪だるま：わわっ、止まっちゃった！",
+        "いたずら雪だるまのハートが、なくなった！",
+        "ニンフィアのリボンが、みんなをひとつにつないだ！",
+        "いたずら雪だるま：うわーっ！　みんなで来るなんて聞いてないぞー！",
+        "いたずら雪だるま：……でも、花畑をこおらせたのは、ごめん。",
       ],
     },
-    hints: [
-      { turn: 3, say: ["ニンフィア：転がっているあいだは、技が当たらないみたい……。"] },
-    ],
     lose: [
-      ["ニンフィア：転がり出したら、何かでつかまえないと止まらないよ。"],
-      ["ニンフィア：ひとりの力じゃ、止めきれないみたい。", "ニンフィア：{friend2}の応援で、力が上がっているときに、つかまえてみて！"],
+      ["ニンフィア：雪だるまが大きく息をすいこんだら、ふぶきが来る合図だよ。", "ニンフィア：ふぶきの前に、{name}の「かまくらを作る」で、みんなを守って！"],
+      ["ニンフィア：ほのおは、雪だるまに2倍効くよ。", "ニンフィア：{friend2}の応援で、みんなの攻撃を強くするのもいいかも。"],
     ],
     skip: {
       after: 3,
-      text: "どうしても止められない（ニンフィアに手伝ってもらう）",
+      text: "どうしても勝てない（ニンフィアに手伝ってもらう）",
       reply: [
         "ニンフィア：わたしのリボンで、つかまえるね！",
-        "ニンフィアのリボンが、ころがり雪だるまをつかまえた！",
+        "ニンフィアのリボンが、いたずら雪だるまを ぐるぐる巻きにした！",
       ],
-      next: "sylveon_finale",
-    },
-  },
-
-  // ---- 決め技：2組そろって（旧案の段階3） ----
-  //  ニンフィアのリボンが2組をつなぐ。「みんなでいっせいに」を選ぶと勝ち。
-  //  決め技を選ぶキャラは【仮】で主人公。ほかのコマンドは、理由を聞いて選び直す（ハートは減らない）
-  finale: {
-    title: "決め技　2組そろって",
-    hearts: 0,
-    leader: "hero",
-    commands: ["together", "alone", "leave"],
-    party: ["eevee", "charizard", "clefairy", { who: "axew", if: "axew" }, "sylveon", { who: "hero" }, "friend1", "friend2", "friend3"],
-    enemy: {
-      who: ["snowman1", "snowman2"],
-      gauge: "", max: 1,
-      weak: ["together"],
-      regen: false,
-      damage: 0,
-      blizzard: 0,
-      bounce: "2体の雪だるまに、押し返された！",
-      break: [
-        "みんなの力が、ひとつになって届いた！",
-        "よろい雪だるま：うわーっ！　みんなで来るなんて聞いてないぞー！",
-        "ころがり雪だるま：……でも、花畑をこおらせたのは、ごめん。",
-      ],
+      next: "sylveon_win",
     },
   },
 };
@@ -1673,6 +1616,7 @@ const UI = {
   menuTitle: "メニュー",
   menuParty: "📖 なかまノート",
   menuMap: "🗺 夢の部屋の地図",
+  menuHouseMap: "🗺 家の地図",
   menuToTitle: "🏠 タイトルへもどる",
   menuNote: "記録は、この端末に自動で保存されます。",
 
@@ -1683,6 +1627,11 @@ const UI = {
   roomDone: "▶ つぎへ",
   darkDefault: "暗くて、よく見えない。……{item}、かな？",
   darkShine: "リングの形の光だ……！",
+
+  // 家全体の地図（2-7 のあと）
+  houseMapTitle: "🗺 家の地図",
+  houseMapCaption: "会った仲間の場所に、印がついている。家の外は、白い霧で見えない。",
+  houseStarTemp: "仮",   // プレゼントの場所を決めていないときに、星の横に出す
 
   // 氷の床のパズル
   iceHelp: "矢印キー（または ボタン・スワイプ）で、すべる方向を選ぼう。",
@@ -1702,35 +1651,43 @@ const UI = {
   walkTeam: "集まった仲間",
   walkTeamNone: "まだ、だれもいない",
 
-  // 戦い（BATTLES・MOVES）。雪だるまごとの文は BATTLES に書く
+  // 戦い（BATTLES・MOVES）。相手ごとの文は BATTLES に書く
+  battleChoose: "一緒に戦う仲間を、{n}人えらぼう。",
+  battleChooseNote: "{leader}は、かならず戦う。ほかに、だれと戦う？",
+  battleChooseOk: "この仲間で戦う",
+  battleChooseLeft: "あと{n}人えらぼう",
   battleAsk: "{who}は どうする？",
+  battleBack: "◀ ひとつ前の仲間にもどる",
   battleUse: "{who}の {move}！",
   battleBoost: "てだすけで、いつもの{n}倍の力だ！",
-  battleBounce: "でも、効かなかった！",
-  battleHit: "{gauge}が、少し減った！",
-  battleBreak: "{gauge}が、なくなった！",
-  battleRegen: "{enemy}の{gauge}が、元にもどった！",
+  battleWeak: "こうかは ばつぐんだ！",
+  battleCharged: "ためた力で、{n}倍の いりょくだ！",
+  battleFoeDamage: "{enemy}のハートが、{n}つ減った！",
+  battleWin: "{enemy}を、やっつけた！",
   battleHelp: "{target}の技が、{n}倍になる！",
   battleHelpNone: "でも、手伝える仲間がいない……。",
   battleCheer: "みんなの攻撃が、{n}ターンのあいだ強くなる！",
   battleCheerEnd: "力アップの効き目が切れた。",
   battleHeal: "ハートが{n}つふえた！",
   battleHealFull: "ハートは、もう満タンだ。",
-  battleAttack: "{enemy}の 攻撃！",
-  battleBlizzard: "ふぶきが吹きつけた！",
+  battleGuard: "みんなを守る準備ができた！",
+  battleCharge: "次のターン、{who}の攻撃が{n}倍になる！",
+  battleChargeOn: "💥 ため中",
+  battleBlocked: "でも、ダメージを防いだ！",
+  battleFoeHeal: "{enemy}のハートが、{n}つもどった！",
   battleDamage: "ハートが{n}つへった！",
   battleLose: "ハートが、なくなってしまった……！",
   battleRetry: "ハート{n}つで、もう一度！",
   battleTurn: "ターン{n}",
-  battleStorm: "❄ 次のふぶき：ターン{n}の終わり",
-  battleStormNow: "❄ このターンの終わりに、ふぶき！",
-  battleHearts: "ハート",
+  battleHearts: "みんなのハート",
+  battleFoeHearts: "ハート",
   battleCheerOn: "💪 力アップ中（あと{n}ターン）",
   battleSkip: "どうしても勝てない",
 
   // 章の終わり
   endNext: "つづける",
   endMap: "🗺 夢の部屋の地図を見る",
+  endHouseMap: "🗺 家の地図を見る",
   toTitle: "タイトルへもどる",
 
   // 印刷用カード（cards.html）
