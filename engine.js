@@ -1620,6 +1620,7 @@
   }
 
   // 戦いのデータを、動く順番の一覧（members）にまとめる
+  //   last：相手の最後の何個のハートは、決め技（finish の技）でしか減らないか
   //   on  ：条件の名前が入っているかを調べる関数（点検では、全員が仲間になったものとして調べる）
   //   pick：えらんだ仲間（leader 以外の名前の一覧）。書かなければ、えらべる仲間の上から choose 人
   //   choose を書いた戦いでは、party のうち条件（if）に合う人が「えらべる仲間」。
@@ -1648,6 +1649,7 @@
       foes: toArray(e.who).filter((w) => CHARS[w]),
       enemy: e,
       foeHearts: Math.max(1, Math.floor(Number(e.hearts) || 1)),
+      last: Math.max(0, Math.floor(Number(e.last) || 0)),
       weak: toArray(e.weak),
       actions: toArray(e.actions).filter((a) => a && typeof a === "object"),
     };
@@ -1665,9 +1667,11 @@
 
   // さくせん（commands のない仲間）：上から順に調べて、条件に合った最初の技（合うものがなければ、動かない）
   //   hearts: 2 → ハートが2以下のとき / cheer: false → 力アップが切れているとき（true は、力アップ中）
+  //   foe: 3 → 相手のハートが3以下のとき
   function pickTactic(m, st) {
     for (const t of m.tactics) {
       if (t.hearts != null && !(st.hearts <= Number(t.hearts))) continue;
+      if (t.foe != null && !(st.foe <= Number(t.foe))) continue;
       if (t.cheer === false && st.cheerLeft > 0) continue;
       if (t.cheer === true && !(st.cheerLeft > 0)) continue;
       if (MV[t.move]) return t.move;
@@ -1713,7 +1717,7 @@
 
     // 仲間の番（party の上から順）
     let boost = 0;           // てだすけの倍率（次に動く仲間に効く）
-    let guardBig = false;    // big の行動（ふぶきなど）を防ぐ
+    let guardBig = null;     // big の行動（ふぶきなど）を防ぐ技（大技でない攻撃には効かないので、そのときは技の miss を出す）
     let guardAll = false;    // 相手の攻撃を、すべて防ぐ
     for (let i = 0; i < b.members.length && !st.won; i++) {
       const m = b.members[i];
@@ -1730,17 +1734,25 @@
       const v = quiet ? null : vars({ who: whoName(m.who), move: fill(mv.name || id) });
       if (!quiet) {
         add(mv.text ? btText(mv.text, v) : T("battleUse", v), { fx: mv.ribbon ? "ribbon" : "" });
-        if (times > 1) add(T("battleBoost", { n: times }));
+        // てだすけで強くなるのは、攻撃・回復・力アップだけ（防ぐ技などでは、倍の文を出さない）
+        if (times > 1 && ["attack", "heal", "cheer"].includes(mv.kind)) add(T("battleBoost", { n: times }));
         for (const ln of btLines(mv.say, v)) add(ln);
       }
       if (mv.kind === "attack") {
         const weak = b.weak.includes(mv.type);
-        const dmg = (power + st.cheer) * Math.max(1, Number(mv.hits) || 1) * (weak ? 2 : 1) * times * (charge || 1);
-        st.foe = Math.max(0, st.foe - dmg);
+        // finish（決め技）は、残りのハートを全部へらす。ほかの技では、相手の最後の last 個のハートはへらせない（よけられる）
+        const dmg = mv.finish ? st.foe
+          : (power + st.cheer) * Math.max(1, Number(mv.hits) || 1) * (weak ? 2 : 1) * times * (charge || 1);
+        const dealt = Math.max(0, Math.min(dmg, st.foe - (mv.finish ? 0 : Math.min(st.foe, b.last))));
+        st.foe -= dealt;
         if (!quiet) {
-          if (charge > 1) add(T("battleCharged", { n: charge }));
-          if (weak) add(T("battleWeak"));
-          add(T("battleFoeDamage", vars({ n: dmg })), { fx: st.foe > 0 ? "hit" : "" });
+          if (dealt > 0 || dmg <= 0) {
+            if (charge > 1) add(T("battleCharged", { n: charge }));
+            if (weak) add(T("battleWeak"));
+            add(T("battleFoeDamage", vars({ n: dealt })), { fx: st.foe > 0 ? "hit" : "" });
+          } else {
+            add(e.dodge ? btText(e.dodge, v) : T("battleDodge", v), { fx: "guard" });
+          }
         }
         if (st.foe <= 0) {
           st.won = true;
@@ -1748,7 +1760,7 @@
             const lines = btLines(e.break, v);
             (lines.length ? lines : [T("battleWin", v)]).forEach((ln, k) => add(ln, { actor: k ? "" : m.who, fx: k ? "" : "break" }));
           }
-        } else if (!st.hitSaid) {
+        } else if (dealt > 0 && !st.hitSaid) {
           st.hitSaid = true;
           if (!quiet) for (const ln of btLines(e.hitSay, v)) add(ln, { actor: "" });
         }
@@ -1766,7 +1778,7 @@
         if (!quiet) add(next ? T("battleHelp", { target: whoName(next.who), n: boost }) : T("battleHelpNone"), next ? { target: next.who, fx: "help" } : {});
       } else if (mv.kind === "guard") {
         if (mv.all) guardAll = true;
-        else guardBig = true;
+        else guardBig = mv;
         if (!quiet && !toArray(mv.say).length) add(T("battleGuard"));
       } else if (mv.kind === "charge") {
         const n = Math.max(2, power || 2);
@@ -1788,6 +1800,8 @@
         if (dmg > 0 && (guardAll || (guardBig && a.big))) {
           if (!quiet) add(a.blocked ? btText(a.blocked, v) : T("battleBlocked"), { fx: "guard" });
         } else if (dmg > 0) {
+          // 防ぐ技を使ったのに、大技ではないので防げなかったときは、その理由（技の miss）を出す
+          if (!quiet && guardBig) for (const ln of btLines(guardBig.miss, v)) add(ln);
           st.hearts = Math.max(0, st.hearts - dmg);
           if (!quiet) add(T("battleDamage", { n: dmg }), { fx: "damage" });
           if (st.hearts <= 0) st.lost = true;
@@ -1861,9 +1875,11 @@
   //   team：battleTeams の1つ
   //   返り値：{ win：最短で勝てるターン数（勝てなければ 0）, path：そのときの選び方（ターンごと）,
   //            lose：最短で負けるターン数（負けることがなければ 0）,
-  //            spam：全員が「いちばん強い攻撃」だけを選んだときの結果（{ win: true, turn: 3 } など） }
+  //            spam：全員が「いちばん強い攻撃」だけを選んだときの結果（{ win: true, turn: 3 } など）,
+  //            guard：大技（big）が来るターンだけ防ぐ技を選び、ほかは「いちばん強い攻撃」を選んだときの結果
+  //                   （防ぐ技を持つ仲間がいないときは null） }
   function battleCheck(id, team, limit = 12) {
-    const out = { win: 0, path: [], lose: 0, spam: null };
+    const out = { win: 0, path: [], lose: 0, spam: null, guard: null };
     const b = battleOf(id, team.on, team.pick);
     if (!b) return out;
     const joint = battleJoint(b);
@@ -1898,6 +1914,16 @@
     for (let n = 1; n <= limit; n++) {
       s = battleTurn(b, s, strong, true).state;
       if (s.won || s.lost) { out.spam = { win: s.won, turn: n }; break; }
+    }
+    // 大技の予告があるターンだけ防ぐ（1-3 なら、ふぶきの前だけ かまくら）。ほかは いちばん強い攻撃
+    const guards = b.members.map((m) => m.commands.find((c) => MV[c].kind === "guard") || null);
+    if (guards.some(Boolean)) {
+      s = battleStart(b);
+      for (let n = 1; n <= limit; n++) {
+        const a = battleAction(b, s.turn);
+        s = battleTurn(b, s, strong.map((c, k) => (a && a.big && guards[k] ? guards[k] : c)), true).state;
+        if (s.won || s.lost) { out.guard = { win: s.won, turn: n }; break; }
+      }
     }
     return { ...out, members: b.members.map((m) => m.who) };
   }
@@ -2849,7 +2875,7 @@
     "battleHeal", "battleHealFull", "battleGuard", "battleBlocked", "battleCharge", "battleCharged", "battleChargeOn",
     "battleWeak", "battleFoeDamage", "battleFoeHeal", "battleFoeHearts", "battleWin",
     "battleDamage", "battleLose", "battleRetry", "battleTurn", "battleHearts", "battleCheerOn", "battleSkip",
-    "battleChoose", "battleChooseNote", "battleChooseOk", "battleChooseLeft", "battleBack",
+    "battleChoose", "battleChooseNote", "battleChooseOk", "battleChooseLeft", "battleBack", "battleDodge",
     "endNext", "endMap", "endHouseMap", "toTitle", "noScene",
   ];
   // 戦いの文で使える { }（{name} などのほかに）
@@ -3121,6 +3147,9 @@
         for (const t of toArray(m.tactics)) {
           const mv = typeof t === "string" ? t : t && t.move;
           if (!MV[mv]) errors.push(`${where} の tactics：「${mv}」という技が、MOVES にありません。`);
+          for (const key of ["hearts", "foe"]) {
+            if (t && typeof t === "object" && t[key] != null && !(Number(t[key]) >= 0)) errors.push(`${where} の tactics の ${key} は、0 以上の数にしてください。`);
+          }
         }
         if (!toArray(m.commands).length && !toArray(m.tactics).length) warnings.push(`${where}（${charName(CHARS[m.who])}）には commands も tactics もないので、戦いでは動きません。`);
       });
@@ -3145,7 +3174,11 @@
         }
         for (const key of ["text", "blocked", "alert", "after"]) checkLines(a[key], `${where} の ${key}`, BATTLE_VARS);
       });
-      for (const key of ["hitSay", "break"]) checkLines(e[key], `${at} の enemy の ${key}`, BATTLE_VARS);
+      for (const key of ["hitSay", "break", "dodge"]) checkLines(e[key], `${at} の enemy の ${key}`, BATTLE_VARS);
+      // last（決め技でしか減らないハート）があるのに、決め技（finish）を使える仲間がいない
+      const finisher = battleParty(def).some((p) => [...toArray(p.commands), ...toArray(p.tactics).map((t) => (typeof t === "string" ? t : t && t.move))]
+        .some((c) => MV[c] && MV[c].finish));
+      if (Number(e.last) > 0 && !finisher) errors.push(`${at} の enemy の last（${e.last}）：決め技（MOVES の finish: true）を使える仲間がいないので、最後のハートが減りません。`);
       toArray(def.hints).forEach((h, i) => {
         if (!h || !(Number(h.turn) > 0)) errors.push(`${at} の hints の${i + 1}番目：turn（何ターン目に出すか）を書いてください。`);
         else checkLines(h.say, `${at} の hints`, BATTLE_VARS);
@@ -3172,6 +3205,7 @@
       if (!MOVE_KINDS.includes(mv.kind)) errors.push(`${at} の kind は、${MOVE_KINDS.join("・")} のどれかにしてください。`);
       checkLines(mv.text, `${at} の text`, BATTLE_VARS);
       checkLines(mv.say, `${at} の say`, BATTLE_VARS);
+      checkLines(mv.miss, `${at} の miss`, BATTLE_VARS);
     }
   }
 
@@ -3397,12 +3431,14 @@
         const r = battleCheck(sc.battle, team);
         const rate = battleRandom(sc.battle, team);
         const how = r.path.map((picks) => picks.filter(Boolean).map((c) => fill((MV[c] && MV[c].name) || c)).join("・")).join(" → ");
-        const spam = !r.spam ? "決着がつかない" : r.spam.win ? `${r.spam.turn}ターンで勝つ` : `${r.spam.turn}ターン目に負ける`;
+        const result = (x) => (!x ? "決着がつかない" : x.win ? `${x.turn}ターンで勝つ` : `${x.turn}ターン目に負ける`);
         rows.push(el("li", {
           class: r.win ? "" : "debug-error",
           text: `${sid}（${sc.battle}）${team.label ? `［${team.label}］` : ""}：`
             + `${r.win ? `最短${r.win}ターンで勝てる` : "勝てない"}`
-            + `／攻撃だけだと${spam}／でたらめに選ぶと、15ターン以内に勝てるのは約${rate}%`,
+            + `／攻撃だけだと${result(r.spam)}`
+            + `${r.guard ? `／大技の予告のときだけ防ぎ、あとは攻撃だと${result(r.guard)}` : ""}`
+            + `／でたらめに選ぶと、15ターン以内に勝てるのは約${rate}%`,
           title: how,
         }));
       }
