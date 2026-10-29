@@ -198,6 +198,7 @@ button { font: inherit; color: inherit; touch-action: manipulation; }
 }
 .title-sub { margin: 0; color: #cfc6e6; font-size: 15px; }
 .title-menu { display: flex; flex-direction: column; gap: 12px; width: min(320px, 86%); margin-top: 18px; }
+.title-menu .title-sound { min-height: 40px; padding: 6px 12px; font-size: 15px; color: #d6cfea; }   /* 音の ON/OFF */
 .title-foot { margin: 18px 0 0; font-size: 12px; color: #8f89b0; }
 
 /* ---------------- 合言葉 ---------------- */
@@ -932,21 +933,18 @@ button { font: inherit; color: inherit; touch-action: manipulation; }
 .bt-member.acting { transform: translateY(-6px) scale(1.08); }
 .bt-member.acting .bt-face { box-shadow: 0 0 0 3px #fff, 0 0 16px 6px rgba(255, 230, 140, .95); }
 .bt-member.helped .bt-face { box-shadow: 0 0 0 3px #bfeaff, 0 0 16px 6px rgba(150, 220, 255, .95); }
-/* 決め技：仲間の列を、ニンフィアのリボンでつなぐ */
-.bt-members.ribbon::before {
-  content: "";
-  position: absolute;
-  z-index: 0;
-  left: 2%;
-  right: 2%;
-  top: calc(var(--face) / 2 - 4px);
-  height: 8px;
-  border-radius: 4px;
-  background: linear-gradient(90deg, #ff8fbf, #ffd3e6 50%, #ff8fbf);
-  box-shadow: 0 0 12px 2px rgba(255, 150, 200, .85);
-  transform-origin: center;
-  animation: bt-ribbon .7s ease-out both;
+/* 決め技：ニンフィアのリボンが、相手をつかまえてから、仲間を1人ずつ線でつなぐ（engine.js の battleRibbon）
+   線は仲間の顔のうしろを通る（.bt-member の z-index が上）。相手の上は通る（つかまえたように見せる） */
+.bt-ribbon { position: absolute; inset: 0; z-index: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; }
+.bt-ribbon path { fill: none; stroke-linecap: round; stroke-linejoin: round; }
+.bt-ribbon .rb-band { stroke: #ff5aa5; stroke-width: 7; filter: drop-shadow(0 0 2px #fff) drop-shadow(0 0 7px rgba(255, 110, 180, .9)); }
+.bt-ribbon .rb-shine { stroke: #fff0f7; stroke-width: 2; }
+.bt-ribbon path.draw {
+  stroke-dasharray: var(--len);
+  stroke-dashoffset: var(--len);
+  animation: rb-draw var(--dur, .8s) ease-out var(--delay, 0s) forwards;
 }
+@keyframes rb-draw { to { stroke-dashoffset: 0; } }
 
 /* コマンド（数字のキーでも選べる） */
 .bt-menu { align-self: stretch; display: flex; flex-direction: column; align-items: center; gap: 6px; min-height: 62px; cursor: auto; }
@@ -1005,6 +1003,16 @@ button { font: inherit; color: inherit; touch-action: manipulation; }
 .bt-team.fx-heal .bt-hearts { animation: bt-glow .7s; }
 .bt-team.fx-cheer .bt-face { animation: bt-glow .7s; }
 .bt-team.lost { filter: grayscale(.7) brightness(.85); }
+/* 攻撃を受けたら、戦いの画面を小さくゆらす（会話の枠はゆらさない。動きを減らす設定の端末では止まる） */
+.battle.fx-shake { animation: bt-shake .42s ease-out; }
+@keyframes bt-shake {
+  0%, 100% { transform: none; }
+  15% { transform: translate(-7px, 2px); }
+  30% { transform: translate(6px, -2px); }
+  45% { transform: translate(-5px, 1px); }
+  60% { transform: translate(4px, -1px); }
+  75% { transform: translate(-2px, 0); }
+}
 @keyframes bt-hit {
   0%, 100% { transform: none; }
   20% { transform: translateX(-7px) rotate(-5deg); filter: brightness(1.5); }
@@ -1023,7 +1031,6 @@ button { font: inherit; color: inherit; touch-action: manipulation; }
 }
 @keyframes bt-pop { 0% { transform: scale(.4); } 60% { transform: scale(1.35); } 100% { transform: none; } }
 @keyframes bt-glow { 0%, 100% { filter: none; } 50% { filter: brightness(1.3) drop-shadow(0 0 8px rgba(255, 240, 150, .95)); } }
-@keyframes bt-ribbon { from { transform: scaleX(0); opacity: 0; } to { transform: none; opacity: 1; } }
 
 /* 相手のハート（多いときは小さく） */
 .bt-foes .bt-pip { color: #7fc3f5; }
@@ -1391,6 +1398,19 @@ button { font: inherit; color: inherit; touch-action: manipulation; }
 }
 .pz-cell.none { border-color: transparent; background: none; }
 .pz-cell.answer { border-color: #d99a1e; background: #ffd66b; }
+/* 正解したあとだけ、答えの列を上から1字ずつ光らせる（data.js の { puzzle: "answer" }） */
+.pz-cell.answer.lit {
+  border-color: #ffbf2f;
+  background: #fff6c6;
+  color: #7a4a00;
+  box-shadow: 0 0 0 2px #fff, 0 0 14px 5px rgba(255, 214, 90, .95);
+  animation: pz-lit .5s ease-out;
+}
+@keyframes pz-lit {
+  0% { transform: scale(.6); }
+  60% { transform: scale(1.18); }
+  100% { transform: none; }
+}
 .puzzle-note {
   margin: 0;
   padding: 2px 12px;
@@ -1443,6 +1463,19 @@ button { font: inherit; color: inherit; touch-action: manipulation; }
   gap: 8px;
 }
 .chat-log > * { width: 100%; max-width: 640px; margin-left: auto; margin-right: auto; }
+/* iPhone の文はタップで進める（設計書 第11節）。すばやくタップしても拡大したり、文字が選ばれたりしないように */
+.chat-log { cursor: pointer; touch-action: manipulation; -webkit-user-select: none; user-select: none; }
+/* タップを待っている間、最後の文の終わりに出す小さな印（消えきらずに、ゆっくり明るさが変わる） */
+.chat-more {
+  display: inline-block;
+  margin-left: 6px;
+  font-size: 12px;
+  line-height: 1;
+  color: #8a6a30;
+  animation: chat-more 1.1s ease-in-out infinite;
+}
+@keyframes chat-more { 0%, 100% { opacity: .85; transform: translateY(0); } 50% { opacity: .3; transform: translateY(2px); } }
+.word-card .chat-more { display: block; margin: 6px auto 0; }
 
 .msg { display: flex; align-items: flex-start; gap: 8px; animation: pop .22s ease-out both; }
 .msg .avatar {
@@ -1569,6 +1602,8 @@ button { font: inherit; color: inherit; touch-action: manipulation; }
 /* ---------------- 章の終わり ---------------- */
 .end-screen { align-items: center; justify-content: center; padding: 20px 16px calc(env(safe-area-inset-bottom) + 20px); overflow-y: auto; }
 .end-card {
+  position: relative;
+  z-index: 1;   /* 雪（.snow-layer）より手前 */
   width: min(520px, 100%);
   margin: auto;
   padding: 28px 22px;
@@ -1811,6 +1846,28 @@ button { font: inherit; color: inherit; touch-action: manipulation; }
 .debug-present { flex-direction: column; align-items: stretch; }
 .debug-error { color: #a1122b; }
 .debug-warn { color: #8a5a00; }
+
+/* ---------------- 雪（data.js の場面の snow。エピローグと、そのあとの終わりの画面） ---------------- */
+/*  雪の位置・大きさ・速さは engine.js が決める（--x 横の位置 / --s 大きさ / --d 落ちる時間 / --sway 横のゆれ / --o こさ） */
+.snow-layer { position: absolute; inset: 0; z-index: 2; overflow: hidden; pointer-events: none; container-type: size; }
+.end-screen .snow-layer { z-index: 0; }   /* 終わりの画面では、カードのうしろにふらせる */
+.snow-layer i {
+  position: absolute;
+  top: -12px;
+  left: var(--x);
+  width: var(--s);
+  height: var(--s);
+  border-radius: 50%;
+  background: #fff;
+  opacity: var(--o, .8);
+  box-shadow: 0 0 6px rgba(255, 255, 255, .8);
+  animation: snow-fall var(--d, 9s) linear var(--delay, 0s) infinite;
+}
+@keyframes snow-fall {
+  0% { transform: translate(0, 0); }
+  50% { transform: translate(var(--sway, 0px), 55cqh); }
+  100% { transform: translate(0, calc(100cqh + 24px)); }
+}
 
 /* 動きを減らす設定の端末では、アニメーションを止める */
 @media (prefers-reduced-motion: reduce) {

@@ -49,6 +49,18 @@
 //    puzzle  : true で最後の謎の枠（下の PUZZLE）を表示する
 //    set     : 条件の名前を記録する（unset で消す）。選択肢にも書ける
 //    draft   : true にすると画面に「仮の内容」と表示（作りかけの目印）
+//    ambient : その場面のあいだ、くり返し鳴らす音（sound.js の音の名前。2-7 の風）
+//    mute    : true にすると、その場面では音を鳴らさない（第3部の外の場面）
+//    snow    : true にすると、雪をふらせる（エピローグ）
+//
+//  【音とエフェクト】（設計書 第13節。くわしくは README の「音とエフェクト」）
+//    { text: "グレイシア：……", sound: "ice" }  → その行を出すときに、音を鳴らす（文はそのまま）
+//    { house: { … }, wait: 1200 }               → 演出の行。wait はミリ秒で、次の行まで一拍置く
+//    { sound: "star" } / { ambient: "wind" }    → 文のない行で、音だけ鳴らす／くり返す音を始める
+//    { puzzle: "answer" }                       → 最後の謎の答えの列を、上から1字ずつ光らせる
+//    音の名前は sound.js の一覧です（?debug の 🛠 →「音の試聴」で聞けます）。
+//    iPhone の場面（mode: "chat"）では短い音だけ、mute の場面では何も鳴りません。
+//    戦いの技の音は MOVES の sound に書きます（数値を変えても、同じ技なら同じ音）。
 //
 //  【よくある書きまちがい】
 //    ・行の終わりのカンマ「,」を忘れる
@@ -82,6 +94,12 @@ const SETTINGS = {
   presentOnMap: false,  // true：プレゼントを隠し、家の地図に星を出す（4-5）。
                         //       星の場所は、遊ぶPCで ?debug →🛠→「遊ぶ前の準備：プレゼントの場所」で決める
                         // false：家の人が手渡す（「メリークリスマス」が合図）
+
+  // ---- 音（設計書 第13節。Web Audio API の合成音で、音声ファイルは使わない。鳴らす仕組みは sound.js） ----
+  //  遊ぶ人は、メニュー（≡）とタイトル画面の「音」のボタンで、ON/OFF を切りかえられます（端末ごとに記録）。
+  //  iPhone の Safari では、最初に画面をタップするまで鳴りません。マナーモードでは鳴らないこともあります。
+  sound: true,          // はじめの設定。true：鳴らす / false：鳴らさない
+  inputSound: { correct: "correct", wrong: "wrong" },   // 入力欄（全体）の正解音と、責めない軽い不正解音
 
   // ---- 友達の呼び名（1-3 の花畑の人間組） ----
   //  文章に {friend1} のように書くと、この呼び名に置きかわります。
@@ -511,7 +529,7 @@ const SCENES = {
     bg: "memory",
     battle: "merged",
     lines: [
-      "雪だるま兄弟は、ころころと転がって、ひとつに重なった！",
+      { text: "雪だるま兄弟は、ころころと転がって、ひとつに重なった！", sound: "roll" },   // 合体で転がる音
       "合体雪だるま：兄弟そろえば、雪だるまは無敵だー！",
       "ニンフィア：今度は、わたしとイーブイも一緒に戦う！",
       "イーブイ：{name}、ぼくが てだすけするよ！",
@@ -1034,29 +1052,30 @@ const SCENES = {
     house: { show: ["dream"] },        // はじめは夢の部屋だけ（ほかは霧の中）
     lines: [
       "エーフィ：その駅名……。待って、そちらへ力を伸ばしてみるわ。",
-      { house: { show: ["path", "living"] } },
+      // 音とエフェクト（第13節）：地図が広がるたびに一拍置く（wait）。花畑が家具に変わる瞬間に音を鳴らす
+      { house: { show: ["path", "living"] }, wait: 1200 },
       "夢の部屋の地図が、リビングまで広がっていく。",
-      { house: { home: ["path", "living"] } },
+      { house: { home: ["path", "living"] }, sound: "furniture" },
       "花畑の景色が、すうっと家具に変わっていった。",
       // 組み合わせは、house.js の花畑（living）の置きかえ（倒木→ソファ、切り株→テーブルなど）に合わせる
       "イーブイ：えっ……倒木がソファで、切り株がテーブルだったの？",
       "イーブイ：ニンフィアの花畑は、{name}の家のリビングだったんだ……！",
       // 花畑で友達に話しかけていたら（humans を記録）、この行も出る
       { if: "humans", text: "イーブイ：花畑に友達がいたのも、ここが{name}たちの遊び場だったからなんだ！" },
-      { house: { show: ["washitsu", "plaza", "forest"] } },
+      { house: { show: ["washitsu", "plaza", "forest"] }, wait: 1200 },
       "地図は、和室と洋室、ベランダへも広がった。",
-      { house: { home: ["washitsu", "plaza", "forest"] } },
+      { house: { home: ["washitsu", "plaza", "forest"] }, sound: "furniture" },   // 花畑と同じ、家具に変わる音
       "どれも、本当の形に変わっていく。",
       // 1-1 の森はベランダ、小道はろうか（10/25 決定）。だから「全部」
       "イーブイ：はじまりの森も、氷の洞窟も、光の広場も……。",
       "イーブイ：全部、{name}の家だったんだ！",
       "イーブイ：エーフィが言ってた「別の景色」って、このことだったんだ。",
-      { house: { show: "all" } },
+      { house: { show: "all" }, wait: 1200 },
       // 台所はリビングといっしょに出ているので、ここで広がるのは浴室・トイレ・物入れ
       "地図は浴室まで広がり、家全体の間取りができあがった。",
       { house: { marks: true } },
       "会った仲間の場所に、仲間の印が光っている。",
-      { house: { fog: true } },
+      { house: { fog: true }, ambient: "wind" },   // 霧の外周に風の音（終わりの画面で止まる）
       "家の壁の外は、白い霧に包まれて何も見えない。",
       "イーブイ：わあ……家の中が全部見える！　でも、その先は真っ白だ。",
       "エーフィ：……だめ。わたしの力は、この家の中までしか届かない。",
@@ -1074,6 +1093,7 @@ const SCENES = {
   espeon_map_2: {
     bg: "dream",
     house: { show: "all", home: "all", marks: true, fog: true },   // 家全体の地図を出したまま
+    ambient: "wind",                                                // 霧の外周の風（2-7 の続き。鳴らしたまま）
     lines: [
       "イーブイ：そうか！　ブラッキーが言ってた。あの窓は、どこへでも行けるって！",
       "エーフィ：窓の外では、わたしは何も手伝えないわ。",
@@ -1101,6 +1121,7 @@ const SCENES = {
   //  外へ出られない日は「今日は家の中で進める」を選ぶ（indoor を記録する）。
   //  もらう言葉と合言葉は、外へ出た場合と同じ。変わるのは一部のセリフだけ。
   out_start: {
+    mute: true,   // 第3部（外）では音を鳴らさない（家の中で進める日も同じ）
     chapter: "第3部　窓の外へ",
     mode: "chat",
     chatTitle: "イーブイ・ブラッキー",
@@ -1122,6 +1143,7 @@ const SCENES = {
   },
 
   out_go: {
+    mute: true,   // 第3部（外）では音を鳴らさない
     mode: "chat",
     lines: [
       "イーブイ：よし、出発だ！　家の人と一緒に行こう。",
@@ -1136,6 +1158,7 @@ const SCENES = {
 
   // ---- 3-1 サンダース（駅） ----
   jolteon_meet: {
+    mute: true,   // 第3部（外）では音を鳴らさない
     mode: "chat",
     meet: "jolteon",
     lines: [
@@ -1160,6 +1183,7 @@ const SCENES = {
   },
 
   jolteon_word: {
+    mute: true,   // 第3部（外）では音を鳴らさない
     mode: "chat",
     give: "jolteon",
     lines: [
@@ -1175,6 +1199,7 @@ const SCENES = {
   },
 
   jolteon_bye: {
+    mute: true,   // 第3部（外）では音を鳴らさない
     mode: "chat",
     lines: [
       { unless: "indoor", text: "サンダース：リーフィアなら{park}にいるぜ。オレなら30秒、きみたちなら……ゆっくり歩いて10分ってとこかな。" },
@@ -1190,6 +1215,7 @@ const SCENES = {
   // ---- 3-2 リーフィア（公園・冬芽） ----
   //  見つからない日や雨の日でも、どの選択肢でも先へ進める
   leafeon_meet: {
+    mute: true,   // 第3部（外）では音を鳴らさない
     mode: "chat",
     meet: "leafeon",
     lines: [
@@ -1208,6 +1234,7 @@ const SCENES = {
   },
 
   leafeon_2: {
+    mute: true,   // 第3部（外）では音を鳴らさない
     mode: "chat",
     lines: [
       "リーフィア：葉を落として冬を越す木もあれば、葉をつけたまま越す木もある。",
@@ -1228,6 +1255,7 @@ const SCENES = {
   },
 
   leafeon_3: {
+    mute: true,   // 第3部（外）では音を鳴らさない
     mode: "chat",
     give: "leafeon",
     lines: [
@@ -1243,6 +1271,7 @@ const SCENES = {
 
   // イーブイの気づきは、ここではまだ言葉にしない（答えは最終章で、8匹の前で出す）
   leafeon_bye: {
+    mute: true,   // 第3部（外）では音を鳴らさない
     mode: "chat",
     lines: [
       "リーフィア：イーブイ、きみの答えは、みんなの前で出せばいい。",
@@ -1311,6 +1340,8 @@ const SCENES = {
       placeholder: "答えを入力",
       answers: ["メリークリスマス", "merrychristmas"],
       next: "final_gather",
+      // 正解したあとだけ、答えの列を上から1字ずつ光らせてから、4-3 へ（wait：光らせ終わるまで待つ時間）
+      correct: [{ puzzle: "answer", wait: 3300 }],
       wrong: "イーブイ：うーん、ちがうみたい。枠と、なかまノートの言葉を見くらべてみよう。",
       // 13歳向けに、最初からは答えを近づけない（押すたびに1つずつ）
       hint: [
@@ -1333,18 +1364,19 @@ const SCENES = {
   final_gather: {
     bg: "dream",
     house: { show: ["dream"], tokens: ["eevee"], appear: true },
+    // 8匹が現れるたびに、それぞれの音（氷・妖精・太陽・月・水・炎・雷・草。その仲間が最初に話す行の sound）
     lines: [
       { house: { light: true } },
       "言葉を入れると、夢の部屋に光が集まってきた。",
       "光の中から、ひとり、またひとりと、仲間が現れる。",
-      "エーフィ：ブラッキー、おかえりなさい。",
-      "ブラッキー：……ただいま。今度は、ちゃんと帰ってきた。",
-      "グレイシア：ずいぶんにぎやかになったわね。……悪くないわ。",
-      "ニンフィア：みんなそろった！　ねえ、あとで花畑の話も聞いてよ。",
-      "シャワーズ：長い旅だったでしょう。少し休んでいってね。",
-      "ブースター：温かい飲み物、用意しようか。……ふぁ〜、あくびが出ちゃった。",
-      "サンダース：休む前にもう一周……いや、今日はみんなと話すほうが楽しそうだな！",
-      "リーフィア：みんな、自分のペースでここまで来たんだね。",
+      { text: "エーフィ：ブラッキー、おかえりなさい。", sound: "sun" },
+      { text: "ブラッキー：……ただいま。今度は、ちゃんと帰ってきた。", sound: "moon" },
+      { text: "グレイシア：ずいぶんにぎやかになったわね。……悪くないわ。", sound: "ice" },
+      { text: "ニンフィア：みんなそろった！　ねえ、あとで花畑の話も聞いてよ。", sound: "fairy" },
+      { text: "シャワーズ：長い旅だったでしょう。少し休んでいってね。", sound: "water" },
+      { text: "ブースター：温かい飲み物、用意しようか。……ふぁ〜、あくびが出ちゃった。", sound: "fire" },
+      { text: "サンダース：休む前にもう一周……いや、今日はみんなと話すほうが楽しそうだな！", sound: "thunder" },
+      { text: "リーフィア：みんな、自分のペースでここまで来たんだね。", sound: "leaf" },
       "イーブイ：……みんな、そろった。8匹全員に、一度に会えるなんて。",
     ],
     next: "final_answer",
@@ -1397,7 +1429,7 @@ const SCENES = {
       // 地図で光らせる場合
       { if: "presentOnMap", house: { show: "all", home: "all", marks: true, fog: true } },
       { if: "presentOnMap", text: "エーフィ：家の地図を見て。わたしの力で、置いた場所に印をつけておいたわ。" },
-      { if: "presentOnMap", house: { star: true } },
+      { if: "presentOnMap", house: { star: true }, sound: "star" },   // 星の音（星の場所に関係なく、同じ音）
       { if: "presentOnMap", text: "家の地図の一か所が、星のように光った。" },
       { if: "presentOnMap", text: "イーブイ：光っている場所を、探してみて！　地図があれば、きっと見つかるよ。" },
       // 家の人が手渡す場合
@@ -1415,6 +1447,7 @@ const SCENES = {
   // ★ TRUE END（プレゼントに添えたカードのパスワード）は、あとで足す
   epilogue: {
     show: ["eevee", "glaceon", "sylveon", "espeon", "umbreon", "vaporeon", "flareon", "jolteon", "leafeon"],
+    snow: true,   // 雪をふらせる（終わりの画面でも）
     lines: [
       { if: "presentOnMap", text: "イーブイ：見つかった？　よかった……！　みんなで、きみに「ありがとう」って伝えたかったんだ。" },
       { unless: "presentOnMap", text: "イーブイ：よかった……！　みんなで、きみに「ありがとう」って伝えたかったんだ。" },
@@ -1471,7 +1504,8 @@ const SCENES = {
 //      actions  : 相手の行動（ターンごとに、上から順にくり返す）
 //                 text：行動の文 / damage：減るハートの数 / big：true なら「防ぐ」技（guard）で防げる大技 /
 //                 heal：相手のハートがもどる数 / blocked：防いだときの文 / after：行動のあとの文（次の予告など）/
-//                 alert：この行動をするターンに、画面の上に出す予告
+//                 alert：この行動をするターンに、画面の上に出す予告 / sound：行動の文といっしょに鳴らす音
+//                 文の行に sound を書くと、その文を出すときに鳴らす（ふぶきの前の「息をすいこんだ」）
 //      hitSay   : 初めてハートが減ったときのセリフ / break：ハートが 0 になったときの文
 //      label / icon : 相手のハートの見出し（書かなければ「ハート」）／ハートの印（書かなければ ♥）
 //    hints    : 戦っている間のヒント。turn ターン目の始めに出す（最後のヒントは、そのあとも2ターンごとにくり返す）
@@ -1495,6 +1529,7 @@ const SCENES = {
 //    text  : 技を使ったときの文（書かなければ「〇〇の 技の名前！」）
 //    say   : 技を使ったときに続けて出す文（なくてもよい）
 //    miss  : 防ぐ技（guard）を使ったのに、防げない攻撃が来たときの文（効かなかった理由）
+//    sound : 技を使ったときに鳴らす音（sound.js の音の名前。数値を変えても、同じ技なら同じ音）
 const MOVES = {
   // ---- 主人公 ----
   snowball:  { name: "雪玉を投げる", kind: "attack", power: 1, type: "snow", text: "{who}は、雪玉を投げた！", note: "1ダメージ" },
@@ -1506,9 +1541,10 @@ const MOVES = {
   },
 
   // ---- 友達（技の名前は、設計書のとおり） ----
-  pingpong:  { name: "ピンポンアタック", kind: "attack", power: 1, hits: 2, type: "ball", note: "2回当たる（2ダメージ）" },
-  hello:     { name: "ぶんぶんハローYouTube", kind: "cheer", power: 1, turns: 2, note: "2ターンのあいだ、みんなの攻撃が+1" },
-  bench:     { name: "ベンチホテル", kind: "heal", power: 3, text: "{who}の ベンチホテル！　みんなで、ベンチでひと休みした。", note: "ハートを3つ回復" },
+  //  音（sound）：ピンポンアタックは2回当たる音、ぶんぶんハローYouTube は応援の音、ベンチホテルはひと休みの音
+  pingpong:  { name: "ピンポンアタック", kind: "attack", power: 1, hits: 2, type: "ball", note: "2回当たる（2ダメージ）", sound: "pingpong" },
+  hello:     { name: "ぶんぶんハローYouTube", kind: "cheer", power: 1, turns: 2, note: "2ターンのあいだ、みんなの攻撃が+1", sound: "hello" },
+  bench:     { name: "ベンチホテル", kind: "heal", power: 3, text: "{who}の ベンチホテル！　みんなで、ベンチでひと休みした。", note: "ハートを3つ回復", sound: "bench" },
 
   // ---- 合体戦のイーブイとニンフィア（決まった動き。BATTLES の tactics で使う）【仮】 ----
   helpinghand: { name: "てだすけ", kind: "help", power: 2 },
@@ -1539,7 +1575,7 @@ const BATTLES = {
       who: "snowLittle",
       hearts: 13,
       actions: [
-        { text: "雪だるま弟の 雪玉！", damage: 2, after: ["雪だるま弟は、大きく息をすいこんだ……！"] },
+        { text: "雪だるま弟の 雪玉！", damage: 2, after: [{ text: "雪だるま弟は、大きく息をすいこんだ……！", sound: "inhale" }] },   // ふぶきの前に、息を吸いこむ音
         {
           text: "雪だるま弟の ふぶき！", damage: 6, big: true,
           alert: "❄ このターンの終わりに、ふぶきが来る！",
@@ -1594,14 +1630,14 @@ const BATTLES = {
       last: 3,
       dodge: "でも、合体雪だるまは すばやく転がって、よけた！",
       actions: [
-        { text: "合体雪だるまの 雪玉！", damage: 2, after: ["合体雪だるまは、大きく息をすいこんだ……！"] },
+        { text: "合体雪だるまの 雪玉！", damage: 2, after: [{ text: "合体雪だるまは、大きく息をすいこんだ……！", sound: "inhale" }] },
         {
           text: "合体雪だるまの ふぶき！", damage: 8, big: true,
           alert: "❄ このターンの終わりに、ふぶきが来る！",
           blocked: "かまくらが、ふぶきを防いだ！",
           after: ["合体雪だるまは、転がって、ひとまわり大きくなった！"],
         },
-        { text: "合体雪だるまの 大きな雪玉！", damage: 3, after: ["合体雪だるまは、大きく息をすいこんだ……！"] },
+        { text: "合体雪だるまの 大きな雪玉！", damage: 3, after: [{ text: "合体雪だるまは、大きく息をすいこんだ……！", sound: "inhale" }] },
         {
           text: "合体雪だるまの ふぶき！", damage: 8, big: true,
           alert: "❄ このターンの終わりに、ふぶきが来る！",
@@ -1611,7 +1647,7 @@ const BATTLES = {
         {
           text: "合体雪だるまの 特大の雪玉！", damage: 6,
           alert: "⛄ このターンの終わりに、特大の雪玉が来る！",
-          after: ["合体雪だるまは、大きく息をすいこんだ……！"],
+          after: [{ text: "合体雪だるまは、大きく息をすいこんだ……！", sound: "inhale" }],
         },
         {
           text: "合体雪だるまの ふぶき！", damage: 8, big: true,
@@ -1646,8 +1682,10 @@ const BATTLES = {
 //    ・ ：マスなし（何も表示しない）
 //    そのほかの文字：最初から書いてあるマス（「ー」など）
 //  answerColumn：色をつける答えの列（左から何マス目か）
+//  answer：正解したあとに、答えの列へ上から1字ずつ入れて光らせる字（final_puzzle の { puzzle: "answer" }）
 const PUZZLE = {
   answerColumn: 5,
+  answer: "メリークリスマス",
   rows: [
     "・・・・□□□ー□",
     "・・・・□□□・・",
@@ -1769,6 +1807,8 @@ const UI = {
   menuHouseMap: "🗺 家の地図",
   menuToTitle: "🏠 タイトルへもどる",
   menuNote: "記録は、この端末に自動で保存されます。",
+  soundOn: "🔊 音：ON",     // 音の ON/OFF のボタン（メニューとタイトル画面。押すと切りかわる）
+  soundOff: "🔇 音：OFF",
 
   // 夢の部屋の地図
   mapTitle: "🗺 夢の部屋の地図",
