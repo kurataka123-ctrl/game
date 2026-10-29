@@ -891,6 +891,8 @@
       const token = gen;
       const blocked = itemCells(m);
       const pos = Object.assign({}, NV.walkPos);
+      // ついてくる仲間（data.js の follow）。自分が1マス歩くと、自分がいたマスへ来る（道はふさがない）
+      const follower = NV.walkFollow ? Object.assign({}, NV.walkFollow) : null;
       let busy = false;
       view.board.classList.add("walking");
       novel.stage.classList.add("walk-mode");   // 選択肢を、地図にかからない場所に出す
@@ -902,6 +904,7 @@
       const inside = (x, y) => x >= 0 && y >= 0 && x < m.w && y < m.h;
       const save = () => {
         state.walk = { scene: state.scene, map: sc.walk, x: pos.x, y: pos.y, dir: pos.dir };
+        if (follower) state.walk.follow = [follower.x, follower.y];
         storage.save(state);
       };
       // (x, y) にあるもの：{ ev }（人物・出入口の出来事）か { text }（家具やかべを調べた文章）
@@ -1021,6 +1024,11 @@
           save();
           return;
         }
+        if (follower) {
+          follower.x = pos.x;
+          follower.y = pos.y;
+          view.placeFollower(pos.x, pos.y, STEP_MS);
+        }
         pos.x = nx;
         pos.y = ny;
         busy = true;
@@ -1036,6 +1044,8 @@
         if (NV.mode !== "walk" || busy || token !== gen) return;
         const f = frontOf();
         let t = targetAt(f.x, f.y);
+        // 目の前に、ついてくる仲間がいるとき（「イーブイだ。」）
+        if (!t && follower && follower.x === f.x && follower.y === f.y) t = { text: T("walkThing", { item: charName(CHARS[follower.who]) }) };
         if (!t) {
           // 目の前に何もないときは、となりの人物・場所を調べる（向きを合わせなくてもよい）
           for (const d of Object.keys(DIRS)) {
@@ -1364,7 +1374,7 @@
     if (!m || !(m.w > 0) || !(m.h > 0)) return null;
     const base = m[look] || {};
     return {
-      id, w: m.w, h: m.h, name: base.name || "", floor: base.floor || "", wall: base.wall || "",
+      id, w: m.w, h: m.h, view: m.view, name: base.name || "", floor: base.floor || "", wall: base.wall || "",
       items: toArray(m.items).filter((it) => it && it[look]).map((it) =>
         Object.assign({ x: it.x || 0, y: it.y || 0, w: it.w || 1, h: it.h || 1 }, it[look])),
       edges: toArray(m.edges).filter((e) => e && (e[look] || e.id)).map((e) =>
@@ -1448,6 +1458,22 @@
     return { x: Number(s[0]) || 0, y: Number(s[1]) || 0, dir: DIRS[s[2]] ? s[2] : "down" };
   }
 
+  // ついてくる仲間（data.js の follow）が、はじめにいる場所
+  //   この場面で歩いた記録があれば、その場所から。なければ follow の at（自分のとなりのときだけ）。
+  //   どちらでもなければ、自分と同じマス（自分のうしろにかくれていて、歩き出すと出てくる）
+  function followStart(sc, pos) {
+    const f = sc.follow;
+    const m = lookMap(sc.walk, "nature");
+    if (!f || !CHARS[f.who] || !m) return null;
+    const near = (p) => Array.isArray(p) && Number.isInteger(p[0]) && Number.isInteger(p[1])
+      && p[0] >= 0 && p[1] >= 0 && p[0] < m.w && p[1] < m.h
+      && Math.abs(p[0] - pos.x) + Math.abs(p[1] - pos.y) <= 1;
+    const w = state.walk;
+    const saved = w && w.scene === state.scene && w.map === sc.walk ? w.follow : null;
+    const at = [saved, f.at].find(near);
+    return { who: f.who, x: at ? at[0] : pos.x, y: at ? at[1] : pos.y };
+  }
+
   // 場面を描くための材料をそろえる（地図がないときは null）
   function gridSpec(sc) {
     const m = sc.walk ? lookMap(sc.walk, "nature") : null;
@@ -1463,7 +1489,10 @@
       });
     }
     NV.walkPos = walkStart(sc);
-    return Object.assign({}, m, extra, { ring: true, npcs: walkNpcs(sc), player: NV.walkPos });
+    NV.walkFollow = followStart(sc, NV.walkPos);
+    return Object.assign({}, m, extra, {
+      ring: true, npcs: walkNpcs(sc), player: NV.walkPos, who: sc.player, follow: NV.walkFollow,
+    });
   }
 
   // 升目の地図を描く。地図のまわりの1マスは、かべ（出入口・窓）
@@ -1508,21 +1537,44 @@
     }
     const npcs = el("div", { class: "grid-npcs" });
     const front = el("div", { class: "grid-front", hidden: true });
-    const face = withArt(el("span", { class: "grid-face", text: (CHARS.eevee && CHARS.eevee.emoji) || "●" }), "eevee");
+    // 自分のコマ（data.js の場面の player。書かなければイーブイ）と、ついてくる仲間（follow）
+    const faceOf = (id) => {
+      const c = CHARS[id] || {};
+      return withArt(el("span", { class: "grid-face", style: `--c:${c.color || "#ccc"}`, text: c.emoji || "●" }), id);
+    };
+    const face = faceOf(spec.who && CHARS[spec.who] ? spec.who : "eevee");
     const player = el("div", { class: "grid-player", "aria-hidden": "true" }, face);
-    board.append(npcs, front, player);
+    const follower = spec.follow ? el("div", { class: "grid-follower", "aria-hidden": "true" }, faceOf(spec.follow.who)) : null;
+    board.append(npcs, front, ...(follower ? [follower] : []), player);
+    // 縦に長い地図（house.js の view）は、縦 view マス分の窓から、自分のまわりだけを大きく見せる
+    const rows = spec.view > 0 && spec.view < bh ? Math.round(spec.view) : 0;
+    const frame = rows ? el("div", { class: "grid-window", style: `--bw:${bw};--rows:${rows}` }, board) : board;
+    if (rows) board.classList.add("scrolling");
     const side = el("div", { class: "grid-side" });
-    const wrap = el("div", { class: "grid-wrap" }, board, side);
+    const wrap = el("div", { class: "grid-wrap" }, frame, side);
     container.replaceChildren(wrap);
 
     const at = (node, x, y) => {
       node.style.setProperty("--x", x + R);
       node.style.setProperty("--y", y + R);
     };
+    // 窓の位置：自分が窓のまんなかに来るように動かす（地図の上と下の端では止める）
+    const camera = (y, ms) => {
+      if (!rows) return;
+      const top = Math.max(0, Math.min(bh - rows, y + R - Math.floor(rows / 2)));
+      board.style.setProperty("--cam", `${ms || 0}ms`);
+      board.style.transform = `translateY(${((-top / bh) * 100).toFixed(4)}%)`;
+    };
     const place = (x, y, ms, dir) => {
       player.style.setProperty("--t", `${ms || 0}ms`);
       at(player, x, y);
       if (dir) player.dataset.dir = dir;
+      camera(y, ms);
+    };
+    const placeFollower = (x, y, ms) => {
+      if (!follower) return;
+      follower.style.setProperty("--t", `${ms || 0}ms`);
+      at(follower, x, y);
     };
     const setNpcs = (list) => {
       npcs.replaceChildren(...list.map((n) => {
@@ -1539,7 +1591,8 @@
     };
     setNpcs(spec.npcs || []);
     if (spec.player) place(spec.player.x, spec.player.y, 0, spec.player.dir);
-    return { wrap, board, side, player, face, place, setNpcs, setFront };
+    if (spec.follow) placeFollower(spec.follow.x, spec.follow.y, 0);
+    return { wrap, board, side, player, face, place, placeFollower, setNpcs, setFront };
   }
 
   // 矢印のボタン（真ん中に center を置ける）。押してもボタンに焦点が移らないようにする
@@ -3436,6 +3489,9 @@
         errors.push(`${at} に w・h（部屋の大きさ）がありません。`);
         continue;
       }
+      if (m.view != null && !(Number(m.view) >= 3 && Number(m.view) <= m.h + 1)) {
+        warnings.push(`${at} の view（歩くときに一度に見せる縦のマス数）は、3 から ${m.h + 1} までの数にしてください。`);
+      }
       toArray(m.items).forEach((it, i) => {
         const name = (it && ((it.nature && it.nature.name) || (it.home && it.home.name))) || `${i + 1}番目の家具`;
         if (!it || it.x < 0 || it.y < 0 || it.x + (it.w || 1) > m.w || it.y + (it.h || 1) > m.h) {
@@ -3577,6 +3633,18 @@
     const start = { x: Number(s[0]) || 0, y: Number(s[1]) || 0 };
     if (!inside(start.x, start.y) || blocked.has(xy(start.x, start.y))) {
       errors.push(`${at} の start：[${start.x}, ${start.y}] は、歩ける場所ではありません。`);
+    }
+    // 自分のコマ（player）と、ついてくる仲間（follow）
+    if (sc.player != null && !CHARS[sc.player]) errors.push(`${at} の player：「${sc.player}」というキャラクターがいません。`);
+    if (sc.follow != null) {
+      const f = sc.follow;
+      const p = toArray(f && f.at);
+      if (!f || !CHARS[f.who]) errors.push(`${at} の follow：who の「${f && f.who}」というキャラクターがいません。`);
+      if (p.length && (!inside(Number(p[0]), Number(p[1])) || blocked.has(xy(Number(p[0]), Number(p[1]))))) {
+        errors.push(`${at} の follow：at の [${p.join(", ")}] は、歩ける場所ではありません。`);
+      } else if (p.length && Math.abs(Number(p[0]) - start.x) + Math.abs(Number(p[1]) - start.y) > 1) {
+        warnings.push(`${at} の follow：at の [${p.join(", ")}] が、start のとなりではありません（はじめは自分と同じマスに出ます）。`);
+      }
     }
     // 人物のマス（どの人物も、いるものとして調べる）
     const npcCells = new Set();

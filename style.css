@@ -584,6 +584,22 @@ button { font: inherit; color: inherit; touch-action: manipulation; }
 }
 /* かべのない氷の床（地図を使わないとき） */
 .grid-board:not(.ringed) { border: 6px solid #eaf8ff; }
+/* 縦に長い地図（house.js の view）：縦 view マス分の窓から見せ、歩くと地図が上下に動く */
+.grid-window {
+  position: relative;
+  flex: none;
+  width: min(calc(100cqw - 230px), calc((100cqh - 20px) * var(--bw) / var(--rows)), calc(var(--bw) * 76px));
+  aspect-ratio: var(--bw) / var(--rows);
+  border-radius: 12px;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, .35);
+  overflow: hidden;
+}
+.grid-board.scrolling {
+  width: 100%;
+  border-radius: 0;
+  box-shadow: none;
+  transition: transform var(--cam, 0ms) linear;
+}
 
 .tile {
   display: grid;
@@ -677,8 +693,8 @@ button { font: inherit; color: inherit; touch-action: manipulation; }
   color: #7f8b9b;
 }
 
-/* 人物・自分（🦊）・目の前の印 */
-.grid-npc, .grid-player, .grid-front {
+/* 人物・自分（🦊）・ついてくる仲間・目の前の印 */
+.grid-npc, .grid-player, .grid-follower, .grid-front {
   position: absolute;
   left: 0;
   top: 0;
@@ -705,6 +721,7 @@ button { font: inherit; color: inherit; touch-action: manipulation; }
 .grid-npc:nth-child(3n) span { animation-delay: -2.1s; }
 .grid-npc.goal span { box-shadow: 0 0 10px 3px rgba(255, 255, 255, .85); }
 .grid-player { z-index: 2; transition: transform var(--t, 0ms) linear; }
+.grid-follower { z-index: 1; transition: transform var(--t, 0ms) linear; }
 .grid-face { --c: #d8b07a; }
 .grid-face.bump { animation: shake .3s; }
 .grid-board.cleared .grid-face { box-shadow: 0 0 0 4px #fff3b0, 0 0 18px 8px rgba(255, 230, 120, .9); }
@@ -805,6 +822,7 @@ button { font: inherit; color: inherit; touch-action: manipulation; }
 @media (max-width: 640px) {
   .grid-wrap { flex-direction: column; gap: 8px; }
   .grid-board { width: min(94cqw, calc((100cqh - 220px) * var(--bw) / var(--bh))); }
+  .grid-window { width: min(94cqw, calc((100cqh - 220px) * var(--bw) / var(--rows))); }
   .grid-pad { grid-template-columns: repeat(3, 50px); grid-template-rows: repeat(3, 44px); gap: 4px; }
   .grid-side, .grid-controls { flex-direction: row; flex-wrap: wrap; justify-content: center; gap: 8px 12px; }
   .grid-team { width: auto; max-width: 92cqw; }
