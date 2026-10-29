@@ -30,6 +30,12 @@
   const HS = tryGet(() => HOUSE);
   const BT = tryGet(() => BATTLES) || {};
   const MV = tryGet(() => MOVES) || {};
+  // 音を鳴らす仕組み（sound.js）。読み込めなかったときは、音なしで遊べるようにする
+  const SND = window.SOUND || {
+    init() {}, play: () => false, preview() {}, ambient() {}, setMode() {}, isOn: () => false, setOn() {},
+    has: () => false, isLoop: () => false, isShort: () => false, names: () => [], label: () => "",
+    state: () => ({ supported: false, context: "none", on: false, mode: "off", ambient: null }),
+  };
 
   if (!S || !CHARS || !SCN) {
     showLoadError();
@@ -175,8 +181,15 @@
     if (c && c.name) nameToId[c.name] = id;
   }
 
-  // 演出の行か：{ house: … }（2-7 の地図が広がる演出など。文は出さない）
-  const isEffect = (ln) => Boolean(ln) && typeof ln === "object" && ln.house !== undefined;
+  // 演出の行か（文は出さない）。data.js の lines に、次のように書く
+  //   { house: { … } }        家全体の地図を変える（2-7 の地図が広がる演出など）
+  //   { puzzle: "answer" }    最後の謎の答えの列を、上から1字ずつ光らせる（正解したあとだけ）
+  //   { sound: "音の名前" }    音を1回鳴らす（sound.js の音）
+  //   { ambient: "wind" }     くり返す音（環境音）を始める。null で止める
+  //   wait: ミリ秒             演出のあと、次の行まで待つ（地図が広がるたびの「一拍」など）
+  //   文の行に sound を書くと、その文を出すときに鳴らす：{ text: "グレイシア：…", sound: "ice" }
+  const isEffect = (ln) => Boolean(ln) && typeof ln === "object" && (ln.house !== undefined || ln.puzzle !== undefined
+    || (ln.text == null && !ln.who && (ln.sound !== undefined || ln.ambient !== undefined || ln.wait !== undefined)));
 
   // "イーブイ：こんにちは" → { who: "eevee", text: "こんにちは" }
   // { if: "indoor", text: "イーブイ：…" } のような条件つきの行も、同じように読む
@@ -192,6 +205,14 @@
     }
     const suspect = m && /^[ぁ-んァ-ヶー一-龠a-zA-Z]{1,8}$/.test(m[1].trim()) ? m[1].trim() : null;
     return { who: null, text: fill(s.replace(/^[：:]/, "")), suspect };
+  }
+
+  // 会話の1行を、画面に出す形にする（演出の行は { effect }、文の行は parseLine と、鳴らす音 sound）
+  function toLine(ln) {
+    if (isEffect(ln)) return { effect: ln };
+    const p = parseLine(ln);
+    if (ln && typeof ln === "object" && ln.sound) p.sound = ln.sound;
+    return p;
   }
 
   // 場面の会話に出てくる話し手（最大3人。声だけの人物は除く）
@@ -301,6 +322,14 @@
     const m = String(localValues.presentAt || "").match(/^(\d+),(\d+)$/);
     return m ? { x: Number(m[1]), y: Number(m[2]) } : null;
   }
+  // 音の ON/OFF（この端末のブラウザに記録する。記録（セーブ）を消しても残る）
+  //   記録がないときは、data.js の SETTINGS.sound（はじめの設定）
+  SND.init({ key: SAVE_KEY + "-sound", on: S.sound !== false });
+  // 入力欄（全体）の正解音・不正解音（data.js の SETTINGS.inputSound）
+  const inputSound = (kind) => {
+    const name = S.inputSound && S.inputSound[kind];
+    if (name) SND.play(name);
+  };
 
   // name：主人公の名前 / flags：set で記録した条件 / atEnd：章の終わりの画面にいる
   // walk：歩けるマップで最後にいた場所（{ scene, map, x, y, dir }）
@@ -454,17 +483,41 @@
     }
   }
 
-  // 演出の行（data.js の { house: … }）を行う。文は出さない
+  // 演出の行（data.js の { house: … } など）を行う。文は出さない
   function runEffect(fx) {
     if (fx.house !== undefined) showHouse(fx.house, true);
+    if (fx.puzzle === "answer") revealAnswer();
+    if (fx.sound) SND.play(fx.sound);
+    if (fx.ambient !== undefined) SND.ambient(fx.ambient || null);
   }
 
   function nvShow(i) {
     // 演出の行は、すぐに行って次の行へ
+    //   wait を書いた演出は、その時間だけ待ってから次の行を出す（一拍置く。待つ間は、クリックしても進まない）
+    let wait = 0;
     while (i < NV.lines.length && NV.lines[i].effect) {
       runEffect(NV.lines[i].effect);
+      wait += Math.max(0, Number(NV.lines[i].effect.wait) || 0);
       i += 1;
     }
+    if (wait > 0) {
+      const token = gen;
+      const lines = NV.lines;
+      clearTimeout(NV.autoTimer);
+      NV.mode = "pause";
+      novel.mark.hidden = true;
+      NV.autoTimer = setTimeout(() => {
+        if (token !== gen || NV.lines !== lines || NV.mode !== "pause") return;
+        NV.mode = "talk";
+        nvText(i);
+      }, wait);
+      return;
+    }
+    nvText(i);
+  }
+
+  // i 行目の文を出す（1文字ずつ）
+  function nvText(i) {
     if (i >= NV.lines.length) {
       finishSay();
       return;
@@ -479,6 +532,7 @@
     let doneNow = false;
     clearTimeout(NV.autoTimer);
     setSpeaker(ln.who);
+    if (ln.sound) SND.play(ln.sound);
     if (NV.onLine) NV.onLine(i);
     novel.mark.hidden = true;
     if (NV.typer) NV.typer.cancel();
@@ -602,6 +656,7 @@
           novel.chars.classList.toggle("settled", NV.crowd === prevCrowd);
         }
       }
+      setSnow(novel.stage, Boolean(sc.snow));
       setSpeaker(null);
     },
 
@@ -610,7 +665,7 @@
     // opts.auto：話し手のいない行を、自動で次へ進めるまでの時間 / opts.onLine(i)：i 行目を出すときに呼ぶ
     say(lines, then, hold = true, opts) {
       clearTimeout(NV.autoTimer);
-      NV.lines = toArray(lines).filter(visible).map((ln) => (isEffect(ln) ? { effect: ln } : parseLine(ln)));
+      NV.lines = toArray(lines).filter(visible).map(toLine);
       NV.then = then;
       NV.hold = hold;
       NV.auto = (opts && opts.auto) || 0;
@@ -646,6 +701,9 @@
           if (!value) return;
           field.blur();
           setLayer(null);
+          // 前の文を消しておく（正解のあとの演出の間に、まちがえたときの返事などが残らないように）
+          novel.text.textContent = "";
+          setSpeaker(null);
           onSubmit(value);
         },
         onclick: (e) => e.stopPropagation(),
@@ -1036,8 +1094,10 @@
       let b = null;
       let ui = NV.battle;
       let st = null;
+      // 技の音（MOVES の sound）は、その技の文を出すときに鳴らす
       const play = (steps, then) => {
-        NovelView.say(steps.map((s) => s.text), then, true, {
+        const line = (s) => (s.sound ? Object.assign(typeof s.text === "object" ? Object.assign({}, s.text) : { text: s.text }, { sound: s.sound }) : s.text);
+        NovelView.say(steps.map(line), then, true, {
           auto: Math.max(0, Number(S.battleAuto) || 0),
           onLine: (i) => { if (alive()) ui.show(steps[i]); },
         });
@@ -1588,6 +1648,37 @@
       PZ.note ? el("p", { class: "puzzle-note", text: fill(PZ.note) }) : null));
   }
 
+  // 最後の謎：答えの列を、上から1字ずつ光らせる（data.js の { puzzle: "answer" }。正解したあとだけ使う）
+  //   空いているマスには、PUZZLE の answer の字を入れる（「ー」のように、はじめから書いてある字はそのまま）
+  const ANSWER_STEP = 260;   // 1字ごとの間（ミリ秒）
+  function revealAnswer() {
+    if (!PZ || novel.puzzleBox.hidden) return;
+    const letters = Array.from(String(PZ.answer || ""));
+    const token = gen;
+    [...novel.puzzleBox.querySelectorAll(".pz-cell.answer")].forEach((cell, k) => {
+      setTimeout(() => {
+        if (token !== gen) return;
+        if (!cell.textContent && letters[k]) cell.textContent = letters[k];
+        cell.classList.add("lit");
+      }, k * ANSWER_STEP);
+    });
+  }
+
+  // 雪をふらせる（data.js の場面の snow。エピローグ）。parent の中に、雪の層を入れる（on が false なら消す）
+  //   雪の位置・大きさ・速さは、決まった並び（黄金比）でばらす（乱数は使わない）
+  const SNOW_FLAKES = 42;
+  function setSnow(parent, on) {
+    for (const old of parent.querySelectorAll(".snow-layer")) old.remove();
+    if (!on) return;
+    const flakes = Array.from({ length: SNOW_FLAKES }, (_, i) => {
+      const a = (i * 0.6180339887) % 1;
+      const b = (i * 0.4142135624 + 0.3) % 1;
+      return el("i", { style: `--x:${(a * 100).toFixed(2)}%;--s:${(3 + b * 5).toFixed(1)}px;--d:${(7 + b * 7).toFixed(2)}s;`
+        + `--delay:${(-a * 14).toFixed(2)}s;--sway:${((b - 0.5) * 50).toFixed(0)}px;--o:${(0.55 + b * 0.4).toFixed(2)}` });
+    });
+    parent.prepend(el("div", { class: "snow-layer", "aria-hidden": "true" }, flakes));
+  }
+
   // ==============================================================
   // 戦い（data.js の BATTLES・MOVES。1-3 ニンフィアの花畑）
   //   毎ターン、戦う仲間それぞれのコマンドを選ぶ。相手は actions のとおりに動く
@@ -1601,11 +1692,13 @@
   function btText(s, vars) {
     return fill(String(s == null ? "" : s).replace(/\{(\w+)\}/g, (whole, k) => (vars && k in vars ? String(vars[k]) : whole)));
   }
-  // 文の一覧を、条件（if・unless）で選んでから置きかえる
+  // 文の一覧を、条件（if・unless）で選んでから置きかえる（sound を書いた行は、音の名前も残す）
   function btLines(lines, vars) {
     return toArray(lines).filter(visible).map((ln) => {
-      if (ln && typeof ln === "object") return ln.who ? { who: ln.who, text: btText(ln.text, vars) } : btText(ln.text, vars);
-      return btText(ln, vars);
+      if (!ln || typeof ln !== "object") return btText(ln, vars);
+      const text = btText(ln.text, vars);
+      if (!ln.who && !ln.sound) return text;
+      return Object.assign({ text }, ln.who ? { who: ln.who } : {}, ln.sound ? { sound: ln.sound } : {});
     });
   }
 
@@ -1714,6 +1807,7 @@
           p.st = q.st;
           p.fx = q.fx || p.fx;
           p.target = q.target || p.target;
+          p.sound = p.sound || q.sound;
           i += 1;
         }
         steps.push(p);
@@ -1738,7 +1832,8 @@
       const add = (text, extra) => { if (!quiet && text) parts.push(Object.assign({ text, st: snap(), actor: m.who }, extra)); };
       const v = quiet ? null : vars({ who: whoName(m.who), move: fill(mv.name || id) });
       if (!quiet) {
-        add(mv.text ? btText(mv.text, v) : T("battleUse", v), { fx: mv.ribbon ? "ribbon" : "" });
+        // 技の音（MOVES の sound）は、技の名前の文といっしょに鳴らす（数値を変えても、同じ技なら同じ音）
+        add(mv.text ? btText(mv.text, v) : T("battleUse", v), { fx: mv.ribbon ? "ribbon" : "", sound: mv.sound || "" });
         // てだすけで強くなるのは、攻撃・回復・力アップだけ（防ぐ技などでは、倍の文を出さない）
         if (times > 1 && ["attack", "heal", "cheer"].includes(mv.kind)) add(T("battleBoost", { n: times }));
         for (const ln of btLines(mv.say, v)) add(ln);
@@ -1800,7 +1895,7 @@
         const v = quiet ? null : vars({});
         const parts = [];
         const add = (text, extra) => { if (!quiet && text) parts.push(Object.assign({ text, st: snap() }, extra)); };
-        if (!quiet && a.text) add(btText(a.text, v));
+        if (!quiet && a.text) add(btText(a.text, v), { sound: a.sound || "" });
         const dmg = Math.max(0, Math.floor(Number(a.damage) || 0));
         if (dmg > 0 && (guardAll || (guardBig && a.big))) {
           if (!quiet) add(a.blocked ? btText(a.blocked, v) : T("battleBlocked"), { fx: "guard" });
@@ -2013,15 +2108,103 @@
       const fx = step.fx || "";
       if (["hit", "break", "regen", "guard"].includes(fx)) flash(foeBox, "fx-" + fx);
       if (["damage", "heal", "cheer", "charge"].includes(fx)) flash(team, "fx-" + fx);
-      if (fx === "break") {
-        foeBox.classList.add("broken");
-        row.classList.add("ribbon");
-      }
+      if (fx === "damage") flash(root, "fx-shake");   // 攻撃を受けたら、画面をゆらす
+      if (fx === "break") foeBox.classList.add("broken");
       if (fx === "lose") team.classList.add("lost");
-      if (fx === "ribbon") row.classList.add("ribbon");
+      if (fx === "ribbon") ribbon.draw(step.actor);
     };
+    // 決め技（MOVES の ribbon: true）：リボンが相手をつかまえてから、仲間を1人ずつ線でつなぐ
+    const ribbon = battleRibbon(root, foes, members);
     show({ st: battleStart(b) });
     return { root, menu, show };
+  }
+
+  // 決め技のリボン：リボンを出した仲間（from）から、相手へ1本、仲間の列へ1本ずつ、線をのばす
+  //   線は仲間の顔のうしろを通る（手をつないだように見せる）。画面の大きさが変わったら、描き直す
+  function battleRibbon(root, foes, members) {
+    const NS = "http://www.w3.org/2000/svg";
+    const svg = document.createElementNS(NS, "svg");
+    svg.setAttribute("class", "bt-ribbon");
+    svg.setAttribute("aria-hidden", "true");
+    root.prepend(svg);
+    let from = null;
+    let watch = null;
+    // node のまんなかの位置（root の中で。持ち上がる動きの途中でもずれないように、動かす前の位置で数える）
+    const centerOf = (node) => {
+      let x = node.offsetWidth / 2;
+      let y = node.offsetHeight / 2;
+      let n = node;
+      while (n && n !== root) {
+        x += n.offsetLeft;
+        y += n.offsetTop;
+        n = n.offsetParent;
+      }
+      return n === root ? [x, y] : null;
+    };
+    // 点を順につなぐ線（仲間の間は、少したるませる）
+    const chain = (pts, sag) => pts.reduce((d, p, i) => {
+      if (!i) return `M${p[0].toFixed(1)} ${p[1].toFixed(1)}`;
+      const q = pts[i - 1];
+      return `${d} Q${((q[0] + p[0]) / 2).toFixed(1)} ${((q[1] + p[1]) / 2 + sag).toFixed(1)} ${p[0].toFixed(1)} ${p[1].toFixed(1)}`;
+    }, "");
+    const paint = (animate) => {
+      const w = root.clientWidth;
+      const h = root.clientHeight;
+      if (!from || !w || !h) return;
+      const faces = members.map((n) => n.querySelector(".bt-face"));
+      let k = members.findIndex((n) => n.dataset.id === from);
+      if (k < 0) k = members.length - 1;
+      const start = centerOf(faces[k]);
+      if (!start) return;
+      const size = faces[k].offsetWidth || 40;
+      const paths = [];
+      // 相手をつかまえる線：上へのびてから、相手のほうへ曲がる（少し外側へふくらませる）
+      const foeFace = foes.length ? foes[0].querySelector(".bt-face") : null;
+      const target = foeFace ? centerOf(foeFace) : null;
+      const bulge = (start[0] >= (target ? target[0] : 0) ? 1 : -1) * size * 0.8;
+      if (target) paths.push({ d: `M${start[0].toFixed(1)} ${start[1].toFixed(1)} Q${(start[0] + bulge).toFixed(1)} ${target[1].toFixed(1)} ${target[0].toFixed(1)} ${target[1].toFixed(1)}`, delay: 0, dur: 0.55 });
+      // 仲間をつなぐ線：リボンを出した仲間から、左右へ1人ずつ（顔の下のほう＝手の高さを通り、間でたるませる）
+      const hand = (p) => (p ? [p[0], p[1] + size * 0.3] : null);
+      const left = [start, ...faces.slice(0, k).reverse().map(centerOf)].map(hand).filter(Boolean);
+      const right = [start, ...faces.slice(k + 1).map(centerOf)].map(hand).filter(Boolean);
+      for (const pts of [left, right]) if (pts.length > 1) paths.push({ d: chain(pts, size * 0.5), delay: 0.45, dur: 0.25 * (pts.length - 1) + 0.3 });
+      svg.setAttribute("viewBox", `0 0 ${w} ${h}`);
+      svg.replaceChildren();
+      for (const p of paths) {
+        for (const cls of ["rb-band", "rb-shine"]) {
+          const path = document.createElementNS(NS, "path");
+          path.setAttribute("d", p.d);
+          path.setAttribute("class", cls);
+          svg.append(path);
+          if (!animate) continue;
+          const len = path.getTotalLength ? path.getTotalLength() : 0;
+          if (!len) continue;
+          path.style.setProperty("--len", len.toFixed(1));
+          path.style.setProperty("--delay", `${p.delay}s`);
+          path.style.setProperty("--dur", `${p.dur}s`);
+          path.classList.add("draw");
+        }
+      }
+    };
+    return {
+      draw(id) {
+        from = id || from || "sylveon";
+        // 動き（持ち上がる動き）が落ちついてから描く
+        setTimeout(() => {
+          if (!root.isConnected) return;
+          paint(true);
+          if (!watch && typeof ResizeObserver === "function") {
+            let first = true;   // 見はり始めたときの1回目は、描いたばかりなので何もしない
+            watch = new ResizeObserver(() => {
+              if (first) { first = false; return; }
+              if (!root.isConnected) { watch.disconnect(); return; }
+              paint(false);
+            });
+            watch.observe(root);
+          }
+        }, 120);
+      },
+    };
   }
 
   // ==============================================================
@@ -2291,7 +2474,10 @@
     return { root, title, partyBtn, log, foot, draft };
   }
 
-  const CV = { lastWho: undefined, chapter: "", skip: null };
+  // skip：画面をタップ（Enter・スペース）したときにすること（「入力中…」の文をすぐ出す・次の文へ進む）
+  // wait：文を出したあと、まだ読んでいるところ（次の文は、タップしてから出す。設計書 第11節）
+  // last：最後に出したメッセージ（タップを待つ間、この文の終わりに ▼ を出す）
+  const CV = { lastWho: undefined, chapter: "", skip: null, wait: false, last: null };
 
   function scrollChat() {
     requestAnimationFrame(() => { chat.log.scrollTop = chat.log.scrollHeight; });
@@ -2319,8 +2505,27 @@
       CV.lastWho = ln.who;
     }
     chat.log.append(node);
+    if (ln.kind !== "chapter") CV.last = node;
     scrollChat();
     return node;
+  }
+
+  // タップを待ってから next を呼ぶ（iPhone の文は、自動では次へ進めない）
+  //   待っている間は、最後のメッセージの終わりに小さな ▼ を出す
+  function chatWaitTap(next) {
+    const token = gen;
+    for (const m of chat.log.querySelectorAll(".chat-more")) m.remove();
+    const host = CV.last && CV.last.isConnected ? CV.last.querySelector(".bubble, .word-card") : null;
+    const mark = host ? el("span", { class: "chat-more", text: "▼", "aria-hidden": "true" }) : null;
+    if (mark) host.append(mark);
+    scrollChat();
+    CV.skip = () => {
+      CV.skip = null;
+      if (mark) mark.remove();
+      if (token !== gen) return;
+      CV.wait = false;
+      next();
+    };
   }
 
   function addTyping(who) {
@@ -2341,7 +2546,10 @@
         chat.log.replaceChildren();
         CV.lastWho = undefined;
         CV.chapter = "";
+        CV.wait = false;
+        CV.last = null;
       }
+      for (const m of chat.log.querySelectorAll(".chat-more")) m.remove();
       chat.title.textContent = fill(sc.chatTitle || S.chatTitle || T("chatTitle"));
       chat.draft.hidden = !sc.draft;
       chat.foot.replaceChildren();
@@ -2351,9 +2559,12 @@
       }
     },
 
-    // 「入力中…」を出してから、メッセージを1つずつ表示する（演出の行は、メッセージ画面では使わない）
+    // メッセージを1つずつ表示する（演出の行は、メッセージ画面では使わない）
+    //   前の文のあとは、タップしてから次の文を出す（自動では進めない。設計書 第11節「iPhoneの文の送り方」）
+    //   次の文は「入力中…」を出してから表示する。その途中でタップすると、すぐに文を出す
+    //   最後の文のあとは、すぐに then（選択肢・入力欄・「つづける」のボタンなど。そこで止まる）
     say(lines, then) {
-      const items = toArray(lines).filter((ln) => visible(ln) && !isEffect(ln)).map(parseLine);
+      const items = toArray(lines).filter((ln) => visible(ln) && !isEffect(ln)).map(toLine);
       const token = gen;
       chat.foot.replaceChildren();
       let i = 0;
@@ -2364,12 +2575,17 @@
           if (then) then();
           return;
         }
+        if (CV.wait) chatWaitTap(type);
+        else type();
+      };
+      const type = () => {
+        if (token !== gen) return;
         const ln = items[i];
         i += 1;
         const speaking = Boolean(ln.who) && ln.who !== "hero";
         const typing = speaking ? addTyping(ln.who) : null;
         const len = Array.from(ln.text).length;
-        const wait = !S.textSpeed ? 0 : speaking ? Math.min(1700, 500 + len * 28) : 450;
+        const wait = !S.textSpeed ? 0 : speaking ? Math.min(900, 300 + len * 12) : 250;
         let timer = null;
         let done = false;
         const finish = () => {
@@ -2379,6 +2595,8 @@
           CV.skip = null;
           if (typing) typing.remove();
           addMsg(ln);
+          if (ln.sound) SND.play(ln.sound);
+          CV.wait = true;
           step();
         };
         CV.skip = finish;
@@ -2393,6 +2611,7 @@
           type: "button", class: "quick-btn", text: fill(c.text),
           onclick: () => {
             chat.foot.replaceChildren();
+            CV.wait = false;   // 選んだら、返事はすぐに出す
             addMsg({ who: "hero", text: fill(c.say || c.text) });
             onPick(c);
           },
@@ -2410,6 +2629,7 @@
           if (!value) return;
           field.blur();
           chat.foot.replaceChildren();
+          CV.wait = false;
           addMsg({ who: "hero", text: value });
           onSubmit(value);
         },
@@ -2424,6 +2644,7 @@
             type: "button", class: "hint-btn", text: T("inputBack"),
             onclick: () => {
               chat.foot.replaceChildren();
+              CV.wait = false;
               onBack();
             },
           }) : null,
@@ -2431,6 +2652,7 @@
             type: "button", class: "hint-btn", text: T("chatHint"),
             onclick: () => {
               chat.foot.replaceChildren();
+              CV.wait = false;
               addMsg({ who: "hero", text: T("chatHintSay") });
               onHint();
             },
@@ -2439,6 +2661,7 @@
             type: "button", class: "hint-btn", text: "🏳 " + skipText,
             onclick: () => {
               chat.foot.replaceChildren();
+              CV.wait = false;
               addMsg({ who: "hero", text: skipText });
               onSkip();
             },
@@ -2448,24 +2671,32 @@
       if (!TOUCH) field.focus({ preventScroll: true });
     },
 
-    // 言葉を手に入れたときの、特別なメッセージ
+    // 言葉を手に入れたときの、特別なメッセージ（前の文のあとは、タップしてから出す）
     reveal(id, then) {
       const c = CHARS[id] || {};
       const token = gen;
-      CV.lastWho = undefined;
-      chat.log.append(el("div", { class: "msg word-msg", style: `--c:${c.color || "#ccc"}` },
-        el("div", { class: "word-card" },
-          el("div", { class: "word-get", text: T("wordGetChat", { who: charName(c) }) }),
-          wordNode(c.word, "big"),
-          el("div", { class: "word-note", text: T("wordNote") }))));
-      scrollChat();
-      setTimeout(() => { if (token === gen) then(); }, S.textSpeed ? 700 : 0);
+      const put = () => {
+        if (token !== gen) return;
+        CV.lastWho = undefined;
+        const node = el("div", { class: "msg word-msg", style: `--c:${c.color || "#ccc"}` },
+          el("div", { class: "word-card" },
+            el("div", { class: "word-get", text: T("wordGetChat", { who: charName(c) }) }),
+            wordNode(c.word, "big"),
+            el("div", { class: "word-note", text: T("wordNote") })));
+        chat.log.append(node);
+        CV.last = node;
+        CV.wait = true;   // このあとに文が続くときは、タップしてから出す
+        scrollChat();
+        then();
+      };
+      if (CV.wait) chatWaitTap(put);
+      else put();
     },
 
     proceed(cb) {
       chat.foot.replaceChildren(el("button", {
         type: "button", class: "next-btn", text: T("next"),
-        onclick: () => { chat.foot.replaceChildren(); cb(); },
+        onclick: () => { chat.foot.replaceChildren(); CV.wait = false; cb(); },
       }));
       scrollChat();
     },
@@ -2507,6 +2738,10 @@
     setFlags(sc);
     storage.save(state);
     if (DEBUG) debugNow(id);
+    // 音の鳴らし方：第3部（mute）は鳴らさない。iPhone の場面（chat）は短い通知音だけ。PCの場面は全部
+    //   くり返す音（ambient）は、場面ごとに決める（同じ音が続く場面では、鳴らしたまま）
+    SND.setMode(sc.mute ? "off" : sc.mode === "chat" ? "short" : "full");
+    SND.ambient(sc.ambient || null);
     const view = sc.mode === "chat" ? ChatView : NovelView;
     view.enter(sc);
     // 選択肢・入力がある場面は、最後の行のあとすぐに表示する
@@ -2606,8 +2841,10 @@
         storage.save(state);
         view.say(toArray(spec.correct), () => runScene(spec.next), true);
       } else if (isAnswer(text, spec.answers)) {
+        inputSound("correct");   // 正解音（入力欄の全体。data.js の SETTINGS.inputSound）
         view.say(toArray(spec.correct), () => runScene(spec.next), true);
       } else {
+        inputSound("wrong");     // 責めない軽い不正解音
         view.say(toArray(spec.wrong || T("wrong")), () => askInput(sc, view, misses + 1, hints), false);
       }
     }, onHint, onSkip, onBack);
@@ -2635,6 +2872,8 @@
     gen += 1;
     state.atEnd = true;
     storage.save(state);
+    SND.setMode(sc.mute ? "off" : "short");   // 終わりの画面では、くり返す音（風など）を止める
+    SND.ambient(null);
     setBg(endScreen, e.bg || state.bg || "night");
     endScreen.replaceChildren(el("div", { class: "end-card" },
       e.icon ? el("div", { class: "end-icon", text: e.icon, "aria-hidden": "true" }) : null,
@@ -2644,6 +2883,7 @@
         e.map ? el("button", { class: "btn", type: "button", text: houseMapOn() ? T("endHouseMap") : T("endMap"), onclick: openMap }) : null,
         e.next ? el("button", { class: "btn primary", type: "button", text: fill(e.nextLabel || T("endNext")), onclick: () => runScene(e.next) }) : null,
         el("button", { class: "btn", type: "button", text: T("toTitle"), onclick: showTitle }))));
+    setSnow(endScreen, Boolean(sc.snow));   // エピローグの雪は、終わりの画面でもふらせる
     show("end");
   }
 
@@ -2700,6 +2940,7 @@
       houseMapOn() || (RM && flagOn("roomMap"))
         ? el("button", { class: "btn", type: "button", text: houseMapOn() ? T("menuHouseMap") : T("menuMap"), onclick: openMap })
         : null,
+      soundButton("btn"),
       el("button", { class: "btn", type: "button", text: T("menuToTitle"), onclick: showTitle }),
       el("p", { class: "panel-note", text: T("menuNote") }),
       el("button", { class: "btn primary", type: "button", text: T("close"), onclick: closeOverlay })));
@@ -2743,6 +2984,24 @@
   // ==============================================================
   // 9. タイトル・合言葉
   // ==============================================================
+  // 音の ON/OFF のボタン（メニューとタイトル画面）。押すたびに切りかわり、この端末に記録する
+  //   ON にしたときは、確かめの短い音を1回鳴らす（第3部の場面では鳴らさない）
+  function soundButton(cls) {
+    const btn = el("button", { class: cls, type: "button" });
+    const label = () => {
+      btn.textContent = SND.isOn() ? T("soundOn") : T("soundOff");
+      btn.setAttribute("aria-pressed", SND.isOn() ? "true" : "false");
+    };
+    btn.addEventListener("click", () => {
+      SND.setOn(!SND.isOn());
+      label();
+      // iPhone では、音の準備が終わるまで少しかかるので、少し待ってから鳴らす
+      if (SND.isOn()) setTimeout(() => SND.play("toggle"), 120);
+    });
+    label();
+    return btn;
+  }
+
   function showTitle() {
     gen += 1;
     GRID.key = null;
@@ -2750,6 +3009,8 @@
     clearTimeout(NV.autoTimer);
     CV.skip = null;
     closeOverlay();
+    SND.setMode("short");   // タイトルと合言葉の画面では、短い音（正解音など）だけ
+    SND.ambient(null);
     const save = storage.load();
     const canResume = Boolean(save && save.scene && SCN[save.scene]);
     // 記録があるときは「つづきから」をいちばん上にする（まちがえて最初からにしないように）
@@ -2760,7 +3021,8 @@
       el("div", { class: "title-menu" },
         canResume ? el("button", { class: "btn primary", type: "button", text: T("resume"), onclick: () => resume(save) }) : null,
         el("button", { class: canResume ? "btn" : "btn primary", type: "button", text: T("newGame"), onclick: () => newGame(canResume) }),
-        el("button", { class: "btn", type: "button", text: T("keywordButton"), onclick: showKeyword })),
+        el("button", { class: "btn", type: "button", text: T("keywordButton"), onclick: showKeyword }),
+        soundButton("btn ghost title-sound")),
       S.footer ? el("p", { class: "title-foot", text: S.footer }) : null));
     show("title");
   }
@@ -2823,11 +3085,13 @@
         e.preventDefault();
         const id = findKeyword(field.value);
         if (id) {
+          inputSound("correct");
           msg.textContent = T("keywordOk");
           field.blur();
           const token = gen;
           setTimeout(() => { if (token === gen) startFrom(id); }, 800);
         } else {
+          if (field.value.trim()) inputSound("wrong");
           msg.textContent = field.value.trim() ? T("keywordWrong") : T("keywordEmpty");
           field.classList.remove("shake");
           void field.offsetWidth;
@@ -2894,11 +3158,26 @@
     "battleDamage", "battleLose", "battleRetry", "battleTurn", "battleHearts", "battleCheerOn", "battleSkip",
     "battleChoose", "battleChooseNote", "battleChooseOk", "battleChooseLeft", "battleBack", "battleDodge",
     "endNext", "endMap", "endHouseMap", "toTitle", "noScene",
+    "soundOn", "soundOff",
   ];
   // 戦いの文で使える { }（{name} などのほかに）
   const BATTLE_VARS = ["who", "move", "enemy", "target", "n"];
   // 家の地図の演出（{ house: … }）で使える項目
   const HOUSE_KEYS = ["show", "home", "marks", "fog", "star", "light", "tokens", "appear"];
+  // 演出の行（文のない行）で使える項目
+  const EFFECT_ITEM_KEYS = ["house", "puzzle", "sound", "ambient", "wait", "if", "unless"];
+
+  // 場面の会話に書かれた音（sound）の名前の一覧（文の行と演出の行。選択肢の返事・入力欄の返事・ヒントも）
+  function sceneSounds(sc) {
+    const inp = sc.input || {};
+    const lists = [sc.lines, sc.afterWord, inp.correct, inp.wrong, ...toArray(inp.hint), inp.skip && inp.skip.reply,
+      ...toArray(sc.choices).map((c) => c && c.reply)];
+    const names = [];
+    for (const list of lists) {
+      for (const ln of toArray(list)) if (ln && typeof ln === "object" && ln.sound && !names.includes(ln.sound)) names.push(ln.sound);
+    }
+    return names;
+  }
 
   function validate() {
     const errors = [];
@@ -2935,15 +3214,36 @@
       }
       for (const id of toArray(fx.tokens)) if (!CHARS[id]) errors.push(`${where}：house の tokens の「${id}」というキャラクターがいません。`);
     };
+    // 音の名前（sound.js の音）。loop が true なら、くり返す音（場面の ambient）
+    const soundOk = Boolean(window.SOUND);
+    const checkSound = (name, where, loop) => {
+      if (!soundOk || name == null || name === "") return;   // sound.js がないときは、下でまとめて1回だけ知らせる
+      if (!SND.has(name)) errors.push(`${where}：「${name}」という音が、sound.js にありません（使える音：${SND.names().join("・")}）。`);
+      else if (loop && !SND.isLoop(name)) errors.push(`${where}：「${name}」は1回だけ鳴らす音です。ambient には、くり返す音（${SND.names().filter(SND.isLoop).join("・")}）を書いてください。`);
+      else if (!loop && SND.isLoop(name)) errors.push(`${where}：「${name}」はくり返す音です。場面の ambient か、{ ambient: "${name}" } に書いてください。`);
+    };
     const checkLines = (lines, where, allow) => {
       toArray(lines).forEach((ln, i) => {
+        const at = `${where} の${i + 1}行目`;
         if (isEffect(ln)) {
-          checkHouseFx(ln.house, `${where} の${i + 1}行目`);
+          if (ln.house !== undefined) checkHouseFx(ln.house, at);
+          if (ln.puzzle !== undefined) {
+            if (ln.puzzle !== "answer") errors.push(`${at}：puzzle には "answer"（答えの列を光らせる）だけを書けます。`);
+            else if (!PZ || !PZ.answer) errors.push(`${at}：答えの列を光らせるには、PUZZLE に answer（答えの列の字）が必要です。`);
+          }
+          checkSound(ln.sound, at, false);
+          if (ln.ambient) checkSound(ln.ambient, `${at} の ambient`, true);
+          if (ln.wait != null && !(Number(ln.wait) >= 0)) errors.push(`${at}：wait は、0 以上の数（ミリ秒）にしてください。`);
+          for (const key of Object.keys(ln)) if (!EFFECT_ITEM_KEYS.includes(key)) warnings.push(`${at}：演出の行の「${key}」は使えません（${EFFECT_ITEM_KEYS.join("・")}）。`);
           return;
         }
         if (ln && typeof ln === "object" && !ln.who && ln.text == null) {
           errors.push(`${where} の${i + 1}行目に text（文章）がありません。`);
           return;
+        }
+        if (ln && typeof ln === "object") {
+          checkSound(ln.sound, at, false);
+          if (ln.wait != null) warnings.push(`${at}：wait は、文のない演出の行にだけ書けます（この行では使われません）。`);
         }
         checkText(ln && typeof ln === "object" ? ln.text : ln, where, allow);
         const p = parseLine(ln);
@@ -3028,7 +3328,19 @@
         checkHouseFx(sc.house, `${at} の house`);
         if (sc.battle || sc.walk || sc.ice || sc.room || sc.puzzle) errors.push(`${at}：house（家の地図）は、battle・walk・ice・room・puzzle と一緒には使えません。`);
       }
-      if (sc.mode === "chat" && (sc.house || toArray(sc.lines).some(isEffect))) warnings.push(`${at}：メッセージ形式（chat）では、家の地図を表示できません。`);
+      if (sc.mode === "chat" && sc.house) warnings.push(`${at}：メッセージ形式（chat）では、家の地図を表示できません。`);
+      if (sc.mode === "chat" && toArray(sc.lines).some(isEffect)) warnings.push(`${at}：メッセージ形式（chat）では、演出の行（{ house: … }・{ sound: … } など）は使われません。`);
+      // 音とエフェクト（設計書 第13節）：ambient（くり返す音）・mute（鳴らさない）・snow（雪）
+      if (sc.ambient) checkSound(sc.ambient, `${at} の ambient`, true);
+      if (sc.ambient && (sc.mode === "chat" || sc.mute)) warnings.push(`${at}：${sc.mute ? "mute の場面" : "メッセージ形式（chat）の場面"}では、ambient（くり返す音）は鳴りません。`);
+      if (sc.snow && sc.mode === "chat") warnings.push(`${at}：メッセージ形式（chat）では、雪（snow）を表示できません。`);
+      for (const name of sceneSounds(sc)) {
+        if (sc.mute) warnings.push(`${at}：mute の場面なので、音「${name}」は鳴りません。`);
+        else if (sc.mode === "chat" && soundOk && SND.has(name) && !SND.isShort(name)) warnings.push(`${at}：メッセージ形式（chat）の場面では短い通知音だけが鳴るので、音「${name}」は鳴りません。`);
+      }
+      if (!sc.puzzle && [...toArray(sc.lines), ...toArray(sc.input && sc.input.correct)].some((ln) => isEffect(ln) && ln.puzzle !== undefined)) {
+        warnings.push(`${at}：最後の謎の枠（puzzle: true）がない場面なので、答えの列を光らせる演出は表示されません。`);
+      }
       if (sc.battle) {
         if (!BT[sc.battle]) errors.push(`${at} の battle：「${sc.battle}」という戦いが、BATTLES にありません。`);
         if (!sc.next) errors.push(`${at} の battle には、next（勝ったあとの行き先）が必要です。`);
@@ -3079,10 +3391,22 @@
         rows.forEach((r, i) => {
           if (!r[answer - 1] || r[answer - 1] === "・") warnings.push(`PUZZLE の${i + 1}行目は、答えの列にマスがありません。`);
         });
+        // answer（正解したあとに、答えの列に上から入れる字）が、マスの数と、はじめから書いてある字に合うか
+        if (PZ.answer != null) {
+          const cells = rows.map((r) => r[answer - 1]).filter((ch) => ch && ch !== "・");
+          const letters = Array.from(String(PZ.answer));
+          if (letters.length !== cells.length) warnings.push(`PUZZLE の answer（${PZ.answer}）の字の数が、答えの列のマスの数（${cells.length}）と合いません。`);
+          cells.forEach((ch, k) => {
+            if (ch !== "□" && letters[k] && letters[k] !== ch) warnings.push(`PUZZLE の answer の${k + 1}字目「${letters[k]}」が、枠に書いてある「${ch}」と合いません。`);
+          });
+        }
       }
     }
+    // 入力欄（全体）の正解音・不正解音
+    for (const kind of ["correct", "wrong"]) if (S.inputSound && S.inputSound[kind]) checkSound(S.inputSound[kind], `SETTINGS の inputSound の ${kind}`, false);
+    if (!soundOk) warnings.push("sound.js を読み込めませんでした。音は鳴りません（index.html に sound.js の行があるか確かめてください）。");
     for (const key of UI_KEYS) if (TX[key] == null) errors.push(`UI（画面の文字）の「${key}」が見つかりません。`);
-    checkBattles(errors, warnings, check, checkLines);
+    checkBattles(errors, warnings, check, checkLines, checkSound);
     if (RM) {
       const cols = RM.cols || 10;
       const rows = RM.rows || 8;
@@ -3147,7 +3471,7 @@
 
   // 戦いの点検（data.js の BATTLES・MOVES）：書きまちがいと、勝てるかどうか
   const MOVE_KINDS = ["attack", "help", "cheer", "heal", "guard", "charge"];
-  function checkBattles(errors, warnings, check, checkLines) {
+  function checkBattles(errors, warnings, check, checkLines, checkSound) {
     const used = new Set(Object.values(SCN).filter((sc) => sc && sc.battle).map((sc) => sc.battle));
     for (const [id, def] of Object.entries(BT)) {
       const at = `BATTLES の「${id}」`;
@@ -3196,6 +3520,7 @@
           return;
         }
         for (const key of ["text", "blocked", "alert", "after"]) checkLines(a[key], `${where} の ${key}`, BATTLE_VARS);
+        checkSound(a.sound, `${where} の sound`, false);
       });
       for (const key of ["hitSay", "break", "dodge"]) checkLines(e[key], `${at} の enemy の ${key}`, BATTLE_VARS);
       // last（決め技でしか減らないハート）があるのに、決め技（finish）を使える仲間がいない
@@ -3229,6 +3554,7 @@
       checkLines(mv.text, `${at} の text`, BATTLE_VARS);
       checkLines(mv.say, `${at} の say`, BATTLE_VARS);
       checkLines(mv.miss, `${at} の miss`, BATTLE_VARS);
+      checkSound(mv.sound, `${at} の sound`, false);
     }
   }
 
@@ -3473,6 +3799,27 @@
       : el("p", { class: "debug-note", text: "（戦いの場面はありません）" });
   }
 
+  // 音の試聴（設計書 第13節）。音が OFF でも、場面の決まり（第3部は鳴らさない など）があっても、ここでは鳴らす
+  //   実物のPC・iPhoneで鳴り方を確かめるため。iPhone では、マナーモードを切ってから押す
+  function soundTool() {
+    if (!window.SOUND) return el("p", { class: "debug-note", text: "（sound.js を読み込めませんでした。index.html に sound.js の行があるか確かめてください）" });
+    const info = el("p", { class: "debug-note" });
+    const update = () => {
+      const st = SND.state();
+      info.textContent = `いまの設定：音 ${st.on ? "ON" : "OFF"}／鳴らし方 ${st.mode}（full：全部・short：短い音だけ・off：鳴らさない）`
+        + `／再生の準備 ${st.context}${st.supported ? "" : "（この端末では音を使えません）"}／くり返す音 ${st.ambient || "なし"}`;
+    };
+    const buttons = SND.names().map((name) => el("button", {
+      type: "button", text: `▶ ${SND.label(name)}`, title: name,
+      onclick: () => { SND.preview(name); setTimeout(update, 300); },
+    }));
+    update();
+    return el("div", { class: "debug-kw debug-sounds" },
+      el("div", { class: "debug-row" }, buttons),
+      info,
+      el("p", { class: "debug-note", text: "どの場面でどの音を鳴らすかは、data.js の場面に書きます（README の「音とエフェクト」）。くり返す音（風）は、試聴では4秒で止まります。" }));
+  }
+
   function setupDebug(problems) {
     const base = location.href.split(/[?#]/)[0];
     const online = /^https?:$/.test(location.protocol);
@@ -3515,6 +3862,8 @@
       iceTool(),
       el("h4", { text: "戦いの点検（コマンドの選び方を全部ためした結果）" }),
       battleTool(),
+      el("h4", { text: "音の試聴（Web Audio の合成音。音声ファイルは使っていない）" }),
+      soundTool(),
       el("h4", { text: "data.js の点検結果" }),
       problems.errors.length || problems.warnings.length
         ? el("ul", {},
