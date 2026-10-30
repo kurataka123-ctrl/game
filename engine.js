@@ -2277,6 +2277,7 @@
   //   data.js の場面に house: { … } と書くと、この地図を出す。lines の { house: { … } } で地図を変える
   //     show：見せる部屋（"all" で全部）/ home：本当の家具の見た目にする部屋 / marks：会った仲間の印
   //     fog：家の外の霧 / star：プレゼントの星 / light：夢の部屋に光が集まる / tokens・appear：夢の部屋に仲間が現れる
+  //     （appear が true なら話した仲間が増えていく。"one" なら話す1匹だけを出す。tokens で出した仲間は消えない）
   // ==============================================================
   const HOUSE_PAD = 1;   // 家のまわりに描く霧の幅（マス）
 
@@ -2374,6 +2375,7 @@
     board.append(light, tokenBox, star);   // 光は、仲間のうしろに
 
     const st = { shown: new Set(), home: new Set(), marks: false, fog: false, star: false, light: false, appear: false };
+    const fixed = new Set();   // tokens で出した仲間（appear: "one" でも消さない）
     const ids = (v) => (v === "all" ? rooms.map((r) => r.id) : toArray(v)).filter((id) => roomNode[id]);
     const update = () => {
       for (const r of rooms) {
@@ -2392,6 +2394,7 @@
       view.classList.toggle("fog", st.fog);
     };
     // 夢の部屋に、仲間を1人ずつ置く（イーブイはまんなか、ほかは輪になって並ぶ）
+    //   場所は、はじめて現れた順に決める（一度消えて、また現れても同じ場所）
     const placeToken = (node, i) => {
       const cx = dream.x + dream.w / 2;
       const cy = dream.y + dream.h / 2;
@@ -2400,8 +2403,25 @@
       const y = i === 0 ? cy : cy + Math.sin(angle) * dream.h * 0.33;
       node.setAttribute("style", `${at(x, y)};--c:${(CHARS[node.dataset.id] && CHARS[node.dataset.id].color) || "#ccc"}`);
     };
+    // 消えた仲間を、もう一度出す（pop をつけ直して、また現れる動きにする）
+    const showToken = (node, animate) => {
+      node.classList.remove("gone", "pop");
+      if (animate) {
+        void node.offsetWidth;
+        node.classList.add("pop");
+      }
+    };
+    const hideToken = (node) => {
+      node.classList.remove("pop");
+      node.classList.add("gone");
+    };
     const addToken = (id, animate) => {
-      if (!CHARS[id] || tokens.some((n) => n.dataset.id === id)) return;
+      if (!CHARS[id]) return;
+      const old = tokens.find((n) => n.dataset.id === id);
+      if (old) {
+        if (old.classList.contains("gone")) showToken(old, animate);
+        return;
+      }
       const node = el("div", { class: "hm-token" + (animate ? " pop" : ""), "data-id": id },
         withArt(el("span", { class: "hm-mark-face", text: CHARS[id].emoji || "？" }), id));
       // イーブイは、いつもまんなか（0番）
@@ -2449,8 +2469,12 @@
       if (!animate) board.classList.add("no-anim");
       for (const id of ids(f.show)) st.shown.add(id);
       for (const id of ids(f.home)) { st.home.add(id); st.shown.add(id); }
-      for (const key of ["marks", "fog", "star", "light", "appear"]) if (f[key] != null) st[key] = Boolean(f[key]);
-      for (const id of toArray(f.tokens)) addToken(id, animate);
+      for (const key of ["marks", "fog", "star", "light"]) if (f[key] != null) st[key] = Boolean(f[key]);
+      if (f.appear != null) st.appear = f.appear === "one" ? "one" : Boolean(f.appear);
+      for (const id of toArray(f.tokens)) {
+        fixed.add(id);
+        addToken(id, animate);
+      }
       update();
       fit(animate);
       if (!animate) {
@@ -2459,8 +2483,13 @@
       }
     };
     // 話した仲間が、夢の部屋に現れる（appear のとき）
+    //   appear: "one" のときは、次の1匹が現れるときに、前の1匹を消す（tokens で出した仲間は消さない）
     const appear = (who) => {
-      if (st.appear && who !== "hero" && CHARS[who] && !CHARS[who].voice) addToken(who, true);
+      if (!st.appear || who === "hero" || !CHARS[who] || CHARS[who].voice) return;
+      if (st.appear === "one" && !fixed.has(who)) {
+        for (const n of tokens) if (n.dataset.id !== who && !fixed.has(n.dataset.id)) hideToken(n);
+      }
+      addToken(who, true);
     };
     // 画面の (clientX, clientY) にある、家全体の地図のマス（テスト用メニューで、プレゼントの場所を決めるため）
     const cellAt = (cx, cy) => {
@@ -2991,15 +3020,23 @@
   // ==============================================================
   // onClose：とじたときに1回だけ呼ぶ（場面が変わったあとは呼ばない）
   let onOverlayClose = null;
+  // メニュー（≡）・なかまノートのボタンが選ばれたままだと、Enter でまた開いてしまう
+  // （Esc で閉じたとき）。開くときと閉じるときに、選ばれた状態を外して、Enter を文を進めるのに使う
+  function releaseFocus() {
+    const a = document.activeElement;
+    if (a && a !== document.body && !overlay.contains(a) && a.matches("button, a") && typeof a.blur === "function") a.blur();
+  }
   function openOverlay(content, onClose) {
     overlay.replaceChildren(content);
     overlay.classList.add("open");
+    releaseFocus();
     const token = gen;
     onOverlayClose = onClose ? () => { if (token === gen) onClose(); } : null;
   }
   function closeOverlay() {
     overlay.classList.remove("open");
     overlay.replaceChildren();
+    releaseFocus();
     const cb = onOverlayClose;
     onOverlayClose = null;
     if (cb) cb();
@@ -3314,6 +3351,7 @@
         for (const id of toArray(fx[key])) if (!roomIds.has(id)) errors.push(`${where}：house の ${key} の「${id}」という部屋が、house.js にありません（at のある部屋）。`);
       }
       for (const id of toArray(fx.tokens)) if (!CHARS[id]) errors.push(`${where}：house の tokens の「${id}」というキャラクターがいません。`);
+      if (fx.appear != null && ![true, false, "one"].includes(fx.appear)) warnings.push(`${where}：house の appear は true・false・"one" のどれかにしてください。`);
     };
     // 音の名前（sound.js の音）。loop が true なら、くり返す音（場面の ambient）
     const soundOk = Boolean(window.SOUND);

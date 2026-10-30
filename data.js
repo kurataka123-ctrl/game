@@ -1467,11 +1467,12 @@ const SCENES = {
   },
 
   // ---- 4-3 8匹が集まる（作る順番5） ----
-  //  夢の部屋の地図に光が集まり、話した順に、仲間が1匹ずつ地図の上に現れる（house の appear）
+  //  夢の部屋の地図に光が集まり、話す1匹だけが、その言葉の前に地図の上に現れる（house の appear: "one"）
+  //  次の1匹が現れるときに、前の1匹は消える。イーブイの「……みんな、そろった。」で、8匹全員を一度に出す（tokens）
   //  イーブイは、はじめから部屋のまんなかにいる（tokens）
   final_gather: {
     bg: "dream",
-    house: { show: ["dream"], tokens: ["eevee"], appear: true },
+    house: { show: ["dream"], tokens: ["eevee"], appear: "one" },
     // 8匹が現れるたびに、それぞれの音（氷・妖精・太陽・月・水・炎・雷・草。その仲間が最初に話す行の sound）
     lines: [
       { house: { light: true } },
@@ -1485,6 +1486,8 @@ const SCENES = {
       { text: "ブースター：温かい飲み物、用意しようか。……ふぁ〜、あくびが出ちゃった。", sound: "fire" },
       { text: "サンダース：休む前にもう一周……いや、今日はみんなと話すほうが楽しそうだな！", sound: "thunder" },
       { text: "リーフィア：みんな、自分のペースでここまで来たんだね。", sound: "leaf" },
+      // 8匹全員を一度に出す（前に現れた場所に、もう一度）
+      { house: { tokens: ["espeon", "umbreon", "glaceon", "sylveon", "vaporeon", "flareon", "jolteon", "leafeon"] } },
       { bgm: "final" },   // 8匹がそろったところから、最終章の曲（エピローグまで）
       "イーブイ：……みんな、そろった。8匹全員に、一度に会えるなんて。",
     ],
