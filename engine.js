@@ -34,7 +34,8 @@
   const SND = window.SOUND || {
     init() {}, play: () => false, preview() {}, ambient() {}, setMode() {}, isOn: () => false, setOn() {},
     has: () => false, isLoop: () => false, isShort: () => false, names: () => [], label: () => "",
-    state: () => ({ supported: false, context: "none", on: false, mode: "off", ambient: null }),
+    bgm() {}, hasBgm: () => false, bgmNames: () => [], bgmLabel: () => "", previewBgm() {}, bgmDetail: () => ({}),
+    state: () => ({ supported: false, context: "none", on: false, mode: "off", ambient: null, bgm: null, bgmPlaying: null }),
   };
 
   if (!S || !CHARS || !SCN) {
@@ -186,10 +187,12 @@
   //   { puzzle: "answer" }    最後の謎の答えの列を、上から1字ずつ光らせる（正解したあとだけ）
   //   { sound: "音の名前" }    音を1回鳴らす（sound.js の音）
   //   { ambient: "wind" }     くり返す音（環境音）を始める。null で止める
+  //   { bgm: "final" }        曲（BGM）を切りかえる。null で止める（その場面のあいだだけ。PCの場面だけ）
   //   wait: ミリ秒             演出のあと、次の行まで待つ（地図が広がるたびの「一拍」など）
   //   文の行に sound を書くと、その文を出すときに鳴らす：{ text: "グレイシア：…", sound: "ice" }
   const isEffect = (ln) => Boolean(ln) && typeof ln === "object" && (ln.house !== undefined || ln.puzzle !== undefined
-    || (ln.text == null && !ln.who && (ln.sound !== undefined || ln.ambient !== undefined || ln.wait !== undefined)));
+    || (ln.text == null && !ln.who
+      && (ln.sound !== undefined || ln.ambient !== undefined || ln.bgm !== undefined || ln.wait !== undefined)));
 
   // "イーブイ：こんにちは" → { who: "eevee", text: "こんにちは" }
   // { if: "indoor", text: "イーブイ：…" } のような条件つきの行も、同じように読む
@@ -323,8 +326,10 @@
     return m ? { x: Number(m[1]), y: Number(m[2]) } : null;
   }
   // 音の ON/OFF（この端末のブラウザに記録する。記録（セーブ）を消しても残る）
-  //   記録がないときは、data.js の SETTINGS.sound（はじめの設定）
-  SND.init({ key: SAVE_KEY + "-sound", on: S.sound !== false });
+  //   記録がないときは、data.js の SETTINGS.sound（はじめの設定）。曲（BGM）の一覧は SETTINGS.bgm
+  SND.init({ key: SAVE_KEY + "-sound", on: S.sound !== false, bgm: S.bgm });
+  // 場面で鳴らす曲（data.js の場面の bgm）。曲はPCの場面だけ（iPhone の場面と第3部では鳴らさない）
+  const sceneBgm = (sc) => (!sc || sc.mode === "chat" || sc.mute ? null : sc.bgm || null);
   // 入力欄（全体）の正解音・不正解音（data.js の SETTINGS.inputSound）
   const inputSound = (kind) => {
     const name = S.inputSound && S.inputSound[kind];
@@ -489,6 +494,11 @@
     if (fx.puzzle === "answer") revealAnswer();
     if (fx.sound) SND.play(fx.sound);
     if (fx.ambient !== undefined) SND.ambient(fx.ambient || null);
+    // 曲の切りかえ（2-7 の家具に変わる瞬間に止める、4-3 で8匹がそろったら最終章の曲）。PCの場面だけ（mute の場面は鳴らさない）
+    if (fx.bgm !== undefined && currentView === "novel") {
+      const sc = SCN[state.scene];
+      SND.bgm(sc && sc.mute ? null : fx.bgm || null);
+    }
   }
 
   function nvShow(i) {
@@ -712,7 +722,7 @@
         field,
         el("div", { class: "input-buttons" },
           onBack ? el("button", {
-            type: "button", class: "btn ghost input-back", text: T("inputBack"),
+            type: "button", class: "btn ghost input-back", text: spec.backText ? fill(spec.backText) : T("inputBack"),
             onclick: () => { setLayer(null); onBack(); },
           }) : null,
           onSkip ? el("button", {
@@ -2522,9 +2532,14 @@
     const head = el("header", { class: "chat-head" }, title, partyBtn, menuBtn);
     const log = el("div", { class: "chat-log", role: "log", "aria-live": "polite" });
     const foot = el("div", { class: "chat-foot" });
+    // 暗い窓（data.js の knock。2-7 のiPhone側）：画面を暗い窓だけにして、タップを待つ
+    const knockText = el("p", { class: "knock-text" });
+    const knock = el("div", { class: "chat-knock", role: "button", tabindex: "0", hidden: true },
+      el("div", { class: "knock-window", "aria-hidden": "true" }, el("span", { class: "knock-moon", text: "🌙" })),
+      knockText);
     const draft = el("div", { class: "draft-badge", text: T("draft"), hidden: true });
-    const root = el("section", { class: "screen chat" }, head, log, foot, draft);
-    return { root, title, partyBtn, log, foot, draft };
+    const root = el("section", { class: "screen chat" }, head, log, foot, knock, draft);
+    return { root, title, partyBtn, log, foot, knock, knockText, draft };
   }
 
   // skip：画面をタップ（Enter・スペース）したときにすること（「入力中…」の文をすぐ出す・次の文へ進む）
@@ -2606,6 +2621,8 @@
       chat.title.textContent = fill(sc.chatTitle || S.chatTitle || T("chatTitle"));
       chat.draft.hidden = !sc.draft;
       chat.foot.replaceChildren();
+      chat.knock.hidden = true;
+      chat.root.classList.remove("knocking");
       if (state.chapter && state.chapter !== CV.chapter) {
         CV.chapter = state.chapter;
         addMsg({ who: null, text: state.chapter, kind: "chapter" });
@@ -2694,7 +2711,7 @@
         form,
         onHint || onSkip || onBack ? el("div", { class: "foot-links" },
           onBack ? el("button", {
-            type: "button", class: "hint-btn", text: T("inputBack"),
+            type: "button", class: "hint-btn", text: spec.backText ? fill(spec.backText) : T("inputBack"),
             onclick: () => {
               chat.foot.replaceChildren();
               CV.wait = false;
@@ -2753,6 +2770,31 @@
       }));
       scrollChat();
     },
+
+    // 暗い窓（data.js の knock）：画面は暗い窓と文だけにして、入力欄などは出さない。
+    //   画面をタップ（Enter・スペース）すると、窓を閉じて then（次の場面へ）
+    knock(sc, then) {
+      const token = gen;
+      const text = fill(sc.knock);
+      chat.foot.replaceChildren();
+      chat.knockText.textContent = text;
+      chat.knock.setAttribute("aria-label", text);
+      chat.knock.hidden = false;
+      chat.root.classList.add("knocking");
+      const go = () => {
+        CV.skip = null;
+        chat.knock.onclick = null;
+        if (token !== gen) return;
+        chat.knock.hidden = true;
+        chat.root.classList.remove("knocking");
+        CV.wait = false;
+        CV.lastWho = undefined;   // 窓が開いたあとの最初の文には、名前と顔をもう一度出す
+        then();
+      };
+      CV.skip = go;
+      chat.knock.onclick = go;
+      if (!TOUCH) chat.knock.focus({ preventScroll: true });
+    },
   };
 
   // ==============================================================
@@ -2792,9 +2834,10 @@
     storage.save(state);
     if (DEBUG) debugNow(id);
     // 音の鳴らし方：第3部（mute）は鳴らさない。iPhone の場面（chat）は短い通知音だけ。PCの場面は全部
-    //   くり返す音（ambient）は、場面ごとに決める（同じ音が続く場面では、鳴らしたまま）
+    //   くり返す音（ambient）と曲（bgm）は、場面ごとに決める（同じ音・曲が続く場面では、鳴らしたまま）
     SND.setMode(sc.mute ? "off" : sc.mode === "chat" ? "short" : "full");
     SND.ambient(sc.ambient || null);
+    SND.bgm(sceneBgm(sc));
     const view = sc.mode === "chat" ? ChatView : NovelView;
     view.enter(sc);
     // 選択肢・入力がある場面は、最後の行のあとすぐに表示する
@@ -2860,6 +2903,8 @@
     if (hasChoices(sc)) return askChoice(sc, view);
     if (sc.input) return askInput(sc, view);
     if (sc.end) return view === ChatView ? view.proceed(() => showEnd(sc)) : showEnd(sc);
+    // knock：暗い窓の画面で、タップを待ってから次の場面へ（メッセージ画面だけ。2-7 のiPhone側）
+    if (sc.knock && sc.next && view === ChatView) return view.knock(sc, () => runScene(sc.next));
     if (sc.next) return view.proceed(() => runScene(sc.next));
     return undefined;
   }
@@ -2927,6 +2972,7 @@
     storage.save(state);
     SND.setMode(sc.mute ? "off" : "short");   // 終わりの画面では、くり返す音（風など）を止める
     SND.ambient(null);
+    SND.bgm(sceneBgm(sc));   // 曲は、その場面の曲のまま（エピローグの終わりの画面は、最終章の曲を続ける）
     setBg(endScreen, e.bg || state.bg || "night");
     endScreen.replaceChildren(el("div", { class: "end-card" },
       e.icon ? el("div", { class: "end-icon", text: e.icon, "aria-hidden": "true" }) : null,
@@ -3062,8 +3108,9 @@
     clearTimeout(NV.autoTimer);
     CV.skip = null;
     closeOverlay();
-    SND.setMode("short");   // タイトルと合言葉の画面では、短い音（正解音など）だけ
+    SND.setMode("short");   // タイトルと合言葉の画面では、短い音（正解音など）だけ。曲は鳴らさない
     SND.ambient(null);
+    SND.bgm(null);
     const save = storage.load();
     const canResume = Boolean(save && save.scene && SCN[save.scene]);
     // 記録があるときは「つづきから」をいちばん上にする（まちがえて最初からにしないように）
@@ -3101,11 +3148,12 @@
   }
 
   // 章の終わりの画面で止めていたときは、その画面から再開する
+  // 場面に resume（data.js）を書いたときは、その場面から再開する（2-7 のiPhone側：入力欄ではなく、暗い窓から）
   function resume(save) {
     loadState(save);
     const sc = SCN[state.scene];
     if (state.atEnd && sc && sc.end) showEnd(sc);
-    else runScene(state.scene);
+    else runScene(sc && sc.resume && SCN[sc.resume] ? sc.resume : state.scene);
   }
 
   // KEYWORDS は「場面の名前: [合言葉, …]」。# で始まる合言葉は暗号として比べる
@@ -3218,7 +3266,7 @@
   // 家の地図の演出（{ house: … }）で使える項目
   const HOUSE_KEYS = ["show", "home", "marks", "fog", "star", "light", "tokens", "appear"];
   // 演出の行（文のない行）で使える項目
-  const EFFECT_ITEM_KEYS = ["house", "puzzle", "sound", "ambient", "wait", "if", "unless"];
+  const EFFECT_ITEM_KEYS = ["house", "puzzle", "sound", "ambient", "bgm", "wait", "if", "unless"];
 
   // 場面の会話に書かれた音（sound）の名前の一覧（文の行と演出の行。選択肢の返事・入力欄の返事・ヒントも）
   function sceneSounds(sc) {
@@ -3275,6 +3323,12 @@
       else if (loop && !SND.isLoop(name)) errors.push(`${where}：「${name}」は1回だけ鳴らす音です。ambient には、くり返す音（${SND.names().filter(SND.isLoop).join("・")}）を書いてください。`);
       else if (!loop && SND.isLoop(name)) errors.push(`${where}：「${name}」はくり返す音です。場面の ambient か、{ ambient: "${name}" } に書いてください。`);
     };
+    // 曲の名前（SETTINGS の bgm）
+    const bgmNames = Object.keys(S.bgm || {});
+    const checkBgm = (name, where) => {
+      if (name == null || name === "") return;
+      if (!bgmNames.includes(name)) errors.push(`${where}：「${name}」という曲が、SETTINGS の bgm にありません（使える曲：${bgmNames.join("・") || "なし"}）。`);
+    };
     const checkLines = (lines, where, allow) => {
       toArray(lines).forEach((ln, i) => {
         const at = `${where} の${i + 1}行目`;
@@ -3286,6 +3340,7 @@
           }
           checkSound(ln.sound, at, false);
           if (ln.ambient) checkSound(ln.ambient, `${at} の ambient`, true);
+          checkBgm(ln.bgm, `${at} の bgm`);
           if (ln.wait != null && !(Number(ln.wait) >= 0)) errors.push(`${at}：wait は、0 以上の数（ミリ秒）にしてください。`);
           for (const key of Object.keys(ln)) if (!EFFECT_ITEM_KEYS.includes(key)) warnings.push(`${at}：演出の行の「${key}」は使えません（${EFFECT_ITEM_KEYS.join("・")}）。`);
           return;
@@ -3350,6 +3405,8 @@
         toArray(inp.hint).forEach((h) => checkLines(h, `${at} の input の hint`));
         if (inp.hintAfter != null && !(Number(inp.hintAfter) >= 0)) errors.push(`${at} の input の hintAfter は、0 以上の数にしてください。`);
         check(inp.back, `${at} の input の back`);
+        checkText(inp.backText, `${at} の input の backText`);
+        if (inp.backText != null && !inp.back) warnings.push(`${at} の input の backText：back（もどる場面）がないので、もどるボタンは出ません。`);
         if (inp.skip) {
           if (!inp.skip.next) errors.push(`${at} の skip に next（行き先）がありません。`);
           check(inp.skip.next, `${at} の skip`);
@@ -3376,6 +3433,14 @@
         checkLines(sc.ice.clear, `${at} の ice の clear`);
         if (sc.mode === "chat") warnings.push(`${at}：メッセージ形式（chat）では、氷の床のパズルを表示できません。`);
       }
+      // 暗い窓（knock。2-7 のiPhone側）と、「つづきから」で代わりに始める場面（resume）
+      if (sc.knock != null) {
+        checkText(sc.knock, `${at} の knock`);
+        if (sc.mode !== "chat") warnings.push(`${at}：knock（暗い窓）は、メッセージ形式（chat）の場面でだけ使えます。`);
+        if (!sc.next) errors.push(`${at} の knock には、next（タップしたあとの行き先）が必要です。`);
+        if (sc.choices || sc.input || sc.end) errors.push(`${at}：knock（暗い窓）の場面では、choices・input・end は使えません（タップすると next へ進みます）。`);
+      }
+      check(sc.resume, `${at} の resume`);
       if (sc.walk) checkWalk(id, sc, at, errors, warnings, check, checkLines, checkText);
       if (sc.house) {
         checkHouseFx(sc.house, `${at} の house`);
@@ -3386,6 +3451,8 @@
       // 音とエフェクト（設計書 第13節）：ambient（くり返す音）・mute（鳴らさない）・snow（雪）
       if (sc.ambient) checkSound(sc.ambient, `${at} の ambient`, true);
       if (sc.ambient && (sc.mode === "chat" || sc.mute)) warnings.push(`${at}：${sc.mute ? "mute の場面" : "メッセージ形式（chat）の場面"}では、ambient（くり返す音）は鳴りません。`);
+      checkBgm(sc.bgm, `${at} の bgm`);
+      if (sc.bgm && (sc.mode === "chat" || sc.mute)) warnings.push(`${at}：${sc.mute ? "mute の場面" : "メッセージ形式（chat）の場面"}では、bgm（曲）は鳴りません（曲はPCの場面だけ）。`);
       if (sc.snow && sc.mode === "chat") warnings.push(`${at}：メッセージ形式（chat）では、雪（snow）を表示できません。`);
       for (const name of sceneSounds(sc)) {
         if (sc.mute) warnings.push(`${at}：mute の場面なので、音「${name}」は鳴りません。`);
@@ -3457,6 +3524,12 @@
     }
     // 入力欄（全体）の正解音・不正解音
     for (const kind of ["correct", "wrong"]) if (S.inputSound && S.inputSound[kind]) checkSound(S.inputSound[kind], `SETTINGS の inputSound の ${kind}`, false);
+    // 曲（BGM）のファイルと音量
+    for (const [name, t] of Object.entries(S.bgm || {})) {
+      const at = `SETTINGS の bgm の「${name}」`;
+      if (!t || typeof t !== "object" || !t.file) errors.push(`${at}：file（曲のファイルの場所。例："bgm/bgm-dream.mp3"）を書いてください。`);
+      else if (t.volume == null || !(Number(t.volume) >= 0 && Number(t.volume) <= 1)) errors.push(`${at}：volume（音量）は、0 から 1 までの数にしてください。`);
+    }
     if (!soundOk) warnings.push("sound.js を読み込めませんでした。音は鳴りません（index.html に sound.js の行があるか確かめてください）。");
     for (const key of UI_KEYS) if (TX[key] == null) errors.push(`UI（画面の文字）の「${key}」が見つかりません。`);
     checkBattles(errors, warnings, check, checkLines, checkSound);
@@ -3875,17 +3948,24 @@
     const update = () => {
       const st = SND.state();
       info.textContent = `いまの設定：音 ${st.on ? "ON" : "OFF"}／鳴らし方 ${st.mode}（full：全部・short：短い音だけ・off：鳴らさない）`
-        + `／再生の準備 ${st.context}${st.supported ? "" : "（この端末では音を使えません）"}／くり返す音 ${st.ambient || "なし"}`;
+        + `／再生の準備 ${st.context}${st.supported ? "" : "（この端末では音を使えません）"}／くり返す音 ${st.ambient || "なし"}`
+        + `／曲 ${st.bgmPlaying ? SND.bgmLabel(st.bgmPlaying) : "なし"}${st.bgmVolumeOk === false ? "（この端末は曲の音量を変えられないので、曲は鳴らしません）" : ""}`;
     };
     const buttons = SND.names().map((name) => el("button", {
       type: "button", text: `▶ ${SND.label(name)}`, title: name,
       onclick: () => { SND.preview(name); setTimeout(update, 300); },
     }));
+    // 曲（BGM）は8秒だけ鳴らして、場面の曲にもどる（効果音と大きさを比べるため）
+    const songs = SND.bgmNames().map((name) => el("button", {
+      type: "button", text: `▶ 曲：${SND.bgmLabel(name)}（8秒）`, title: name,
+      onclick: () => { SND.previewBgm(name, 8); setTimeout(update, 300); },
+    }));
     update();
     return el("div", { class: "debug-kw debug-sounds" },
       el("div", { class: "debug-row" }, buttons),
+      songs.length ? el("div", { class: "debug-row" }, songs) : null,
       info,
-      el("p", { class: "debug-note", text: "どの場面でどの音を鳴らすかは、data.js の場面に書きます（README の「音とエフェクト」）。くり返す音（風）は、試聴では4秒で止まります。" }));
+      el("p", { class: "debug-note", text: "どの場面でどの音・曲を鳴らすかは、data.js の場面に書きます（README の「音とエフェクト」）。くり返す音（風）は4秒、曲は8秒で止まります。曲の音量は、data.js の SETTINGS の bgm の volume です。" }));
   }
 
   function setupDebug(problems) {
@@ -3930,7 +4010,7 @@
       iceTool(),
       el("h4", { text: "戦いの点検（コマンドの選び方を全部ためした結果）" }),
       battleTool(),
-      el("h4", { text: "音の試聴（Web Audio の合成音。音声ファイルは使っていない）" }),
+      el("h4", { text: "音の試聴（効果音は Web Audio の合成音。曲は bgm フォルダの mp3）" }),
       soundTool(),
       el("h4", { text: "data.js の点検結果" }),
       problems.errors.length || problems.warnings.length

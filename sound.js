@@ -2,10 +2,12 @@
    sound.js ― 音を鳴らす仕組み（設計書 第13節「音とエフェクト」）
    ----------------------------------------------------------------
    ふだんは編集しなくて大丈夫です。
-     ・どの場面で、どの音を鳴らすか → data.js（行の sound、場面の ambient・mute など）
+     ・どの場面で、どの音を鳴らすか → data.js（行の sound、場面の ambient・mute・bgm など）
      ・はじめから音を鳴らすか        → data.js の SETTINGS.sound
-   ・音は Web Audio API で、その場で合成します。音声ファイルは使いません
+     ・曲（BGM）のファイルと音量     → data.js の SETTINGS.bgm
+   ・効果音は Web Audio API で、その場で合成します。効果音の音声ファイルは使いません
      （PCで index.html を直接開いても鳴り、GitHub に音源を置かずに済む）。
+   ・曲（BGM）だけは、bgm フォルダの音声ファイル（mp3）を鳴らします（PCの場面だけ。下の「BGM」）。
    ・ポケモンのゲームやアニメの曲・効果音には似せていません（和音や短い音を組み合わせた、手作りの音です）。
    ・iPhone の Safari では、最初に画面をタップするまで鳴りません。マナーモードでは鳴らないこともあります。
      鳴らせないときは何もせずに先へ進むので、ゲームは止まりません。
@@ -411,7 +413,7 @@
     } catch (e) { /* 何もしない */ }
   }
   for (const type of ["pointerdown", "pointerup", "touchend", "mousedown", "keydown", "click"]) {
-    document.addEventListener(type, () => unlock(), { capture: true, passive: true });
+    document.addEventListener(type, () => { unlock(); retryBgm(); }, { capture: true, passive: true });
   }
   // ほかのアプリやタブに切りかえたら止め、もどったら続ける
   document.addEventListener("visibilitychange", () => {
@@ -445,14 +447,158 @@
   }
 
   // ==============================================================
+  // BGM（曲。設計書 第13節の優先2。PCの場面だけ）
+  //   ・曲は bgm フォルダの音声ファイル（mp3）を、<audio> で鳴らす（PCで index.html を直接開いても鳴る）
+  //   ・どの場面でどの曲を鳴らすかは data.js（場面の bgm と、演出の行の { bgm }）。
+  //     iPhone の場面と第3部では、engine.js が曲を頼まない
+  //   ・曲のファイルと音量は data.js の SETTINGS.bgm。音量は、効果音より小さくしてある
+  //   ・ON/OFF は効果音と共通（🔊 音）。ほかのアプリやタブに切りかえると止め、もどると続ける
+  //   ・曲の切りかえは、短くフェードする。止めた曲は、次に鳴らすとき、止めた所から続ける
+  //   ・ファイルが読めないとき・音量を変えられない端末（iPhone の Safari）では、曲なしで進む
+  //   ・ファイルは、はじめて鳴らすときに読みこむ（iPhone で、使わない曲を読みこまないように）
+  // ==============================================================
+  const FADE_MS = 700;      // フェードの長さ（ミリ秒）
+  const FADE_STEP = 30;     // フェードで音量を変える間隔（ミリ秒）
+  let tracks = {};          // 曲の名前 → { file, volume, label }（data.js の SETTINGS.bgm）
+  const players = {};       // 曲の名前 → { audio, level（0〜1）, target, fade, failed, blocked }
+  let bgmWant = null;       // 場面が鳴らしたい曲
+  let bgmTry = null;        // テスト用メニューの試聴で、いま鳴らしている曲
+  let tryTimer = null;      // 試聴を終える時計
+  let volumeOk = null;      // 曲の音量を変えられる端末か（iPhone の Safari は変えられないので、鳴らさない）
+
+  function canSetVolume() {
+    if (volumeOk == null) {
+      try {
+        const a = new Audio();
+        a.volume = 0.5;
+        volumeOk = Math.abs(a.volume - 0.5) < 0.01;
+      } catch (e) {
+        volumeOk = false;
+      }
+    }
+    return volumeOk;
+  }
+
+  const trackVolume = (name) => Math.max(0, Math.min(1, Number(tracks[name] && tracks[name].volume) || 0));
+
+  // 曲の <audio> を作る（はじめて鳴らすときだけ）。作れないときは null
+  function player(name) {
+    if (players[name]) return players[name];
+    const t = tracks[name];
+    if (!t || !t.file || typeof Audio !== "function" || !canSetVolume()) return null;
+    const p = { audio: null, level: 0, target: 0, fade: null, failed: false, blocked: false };
+    try {
+      const a = new Audio();
+      a.loop = true;
+      a.preload = "auto";
+      a.volume = 0;
+      // ファイルが見つからない・読めないときは、その曲をあきらめる（ゲームはそのまま進む）
+      a.addEventListener("error", () => giveUp(p));
+      a.src = t.file;
+      p.audio = a;
+    } catch (e) {
+      p.failed = true;
+    }
+    players[name] = p;
+    return p;
+  }
+
+  function stopFade(p) {
+    clearInterval(p.fade);
+    p.fade = null;
+  }
+  function giveUp(p) {
+    p.failed = true;
+    stopFade(p);
+    p.level = 0;
+    p.target = 0;
+    try { p.audio.pause(); } catch (e) { /* 何もしない */ }
+  }
+
+  // 曲の音量を、to（0〜1。SETTINGS の音量に対する割合）まで、短くフェードして変える。0 になったら一時停止
+  function fadeTo(name, p, to) {
+    if (!p || !p.audio || p.failed) return;
+    if (p.target === to && (p.fade || (to > 0 ? !p.audio.paused && !p.blocked : p.audio.paused))) return;
+    p.target = to;
+    stopFade(p);
+    if (to > 0 && p.audio.paused) {
+      p.blocked = false;
+      try {
+        const r = p.audio.play();
+        if (r && typeof r.catch === "function") {
+          r.catch((e) => {
+            const why = e && e.name;
+            if (why === "AbortError") return;   // 鳴り始める前に止めたとき（曲をすぐ切りかえたなど）
+            if (why !== "NotAllowedError") { giveUp(p); return; }   // 読めない曲は、あきらめる
+            // 画面にまださわっていない（自動で鳴らせない）ときは、次にさわったときにもう一度（retryBgm）
+            stopFade(p);
+            p.level = 0;
+            p.target = 0;
+            p.blocked = true;
+          });
+        }
+      } catch (e) {
+        giveUp(p);
+        return;
+      }
+    }
+    const from = p.level;
+    const t0 = Date.now();
+    const step = () => {
+      const k = Math.min(1, (Date.now() - t0) / FADE_MS);
+      p.level = from + (to - from) * k;
+      try { p.audio.volume = Math.max(0, Math.min(1, p.level * trackVolume(name))); } catch (e) { /* 何もしない */ }
+      if (k < 1) return;
+      stopFade(p);
+      if (to === 0) {
+        try { p.audio.pause(); } catch (e) { /* 何もしない */ }
+      }
+    };
+    p.fade = setInterval(step, FADE_STEP);
+    step();
+  }
+
+  // いま鳴らす曲に合わせる（ほかの曲はフェードして止め、鳴らす曲はフェードして始める）
+  function syncBgm() {
+    const name = bgmTry || bgmWant;
+    const allowed = Boolean(name) && (bgmTry ? true : on) && !document.hidden;
+    for (const [n, p] of Object.entries(players)) if (!allowed || n !== name) fadeTo(n, p, 0);
+    if (allowed) fadeTo(name, player(name), 1);
+  }
+  // 自動で鳴らせなかった曲を、画面にさわったときに、もう一度鳴らす
+  function retryBgm() {
+    if (Object.values(players).some((p) => p.blocked)) syncBgm();
+  }
+
+  // ほかのアプリやタブに切りかえたら、すぐに止める（もどったら、フェードして続ける）
+  function pauseBgm() {
+    for (const p of Object.values(players)) {
+      if (!p.audio) continue;
+      stopFade(p);
+      p.level = 0;
+      p.target = 0;
+      try {
+        p.audio.volume = 0;
+        p.audio.pause();
+      } catch (e) { /* 何もしない */ }
+    }
+  }
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) pauseBgm();
+    else syncBgm();
+  });
+
+  // ==============================================================
   // engine.js から使う入り口（window.SOUND）
   // ==============================================================
   window.SOUND = {
     // 最初に1回：key＝ON/OFF を記録する名前、on＝記録がないときの設定（data.js の SETTINGS.sound）
+    //   bgm＝曲の一覧（data.js の SETTINGS.bgm。{ dream: { file: "bgm/…mp3", volume: 0.2 }, … }）
     init(opts) {
       const o = opts || {};
       saveKey = o.key || "";
       on = o.on !== false;
+      tracks = o.bgm && typeof o.bgm === "object" ? o.bgm : {};
       try {
         const v = saveKey ? localStorage.getItem(saveKey) : null;
         if (v === "on") on = true;
@@ -518,6 +664,14 @@
       try { if (saveKey) localStorage.setItem(saveKey, on ? "on" : "off"); } catch (e) { /* 何もしない */ }
       if (on) unlock();
       syncAmbient();
+      syncBgm();
+    },
+
+    // 場面の曲（BGM）を決める（null で止める）。同じ曲が続く場面では、鳴らしたまま
+    //   engine.js は、PCの場面のときだけ曲を頼む（iPhone の場面・第3部・タイトルでは null）
+    bgm(name) {
+      bgmWant = name && tracks[name] ? name : null;
+      syncBgm();
     },
 
     has: (name) => Boolean(SOUNDS[name]),
@@ -525,12 +679,34 @@
     names: () => Object.keys(SOUNDS),
     label: (name) => (SOUNDS[name] ? SOUNDS[name].label : ""),
     isShort: (name) => Boolean(SOUNDS[name] && SOUNDS[name].short),
+    hasBgm: (name) => Boolean(tracks[name]),
+    bgmNames: () => Object.keys(tracks),
+    bgmLabel: (name) => String((tracks[name] && (tracks[name].label || tracks[name].file)) || name),
 
-    // テスト用：いまの様子
+    // テスト用メニューの曲の試聴：ON/OFF を無視して seconds 秒だけ鳴らし、そのあとは場面の曲にもどる
+    previewBgm(name, seconds) {
+      if (!tracks[name]) return;
+      bgmTry = name;
+      syncBgm();
+      clearTimeout(tryTimer);
+      tryTimer = setTimeout(() => { bgmTry = null; syncBgm(); }, (Number(seconds) || 8) * 1000);
+    },
+
+    // テスト用：いまの様子（bgm：場面が鳴らしたい曲 / bgmPlaying：いま聞こえている曲 / bgmVolumeOk：曲の音量を変えられる端末か）
     state: () => ({
       supported: Boolean(AC), context: ctx ? ctx.state : "none", on, mode,
       ambient: amb ? amb.name : null, want,
+      bgm: bgmWant,
+      bgmPlaying: Object.keys(players).find((n) => players[n].audio && !players[n].audio.paused && players[n].target > 0) || null,
+      bgmVolumeOk: canSetVolume(),
     }),
+
+    // テスト用：曲ごとのくわしい様子（音量・止まっているか・読めなかったか・どこまで鳴ったか）
+    bgmDetail: () => Object.fromEntries(Object.entries(players).map(([n, p]) => [n, {
+      level: Math.round(p.level * 1000) / 1000, target: p.target, fading: Boolean(p.fade), failed: p.failed, blocked: p.blocked,
+      paused: p.audio ? p.audio.paused : true, volume: p.audio ? Math.round(p.audio.volume * 1000) / 1000 : 0,
+      time: p.audio ? Math.round(p.audio.currentTime * 10) / 10 : 0,
+    }])),
 
     // テスト用：いま鳴っている音の大きさ（0〜1。いちばん大きいところ）
     level() {
