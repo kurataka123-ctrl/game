@@ -210,12 +210,13 @@
     return { who: null, text: fill(s.replace(/^[：:]/, "")), suspect };
   }
 
-  // 会話の1行を、画面に出す形にする（演出の行は { effect }、文の行は parseLine と、鳴らす音 sound・光らせる仲間 glow）
+  // 会話の1行を、画面に出す形にする（演出の行は { effect }、文の行は parseLine と、鳴らす音 sound・光らせる仲間 glow・光らない仲間を暗くする dim）
   function toLine(ln) {
     if (isEffect(ln)) return { effect: ln };
     const p = parseLine(ln);
     if (ln && typeof ln === "object" && ln.sound) p.sound = ln.sound;
     if (ln && typeof ln === "object" && ln.glow !== undefined) p.glow = toArray(ln.glow);
+    if (ln && typeof ln === "object" && ln.dim) p.dim = true;
     return p;
   }
 
@@ -469,7 +470,8 @@
     || !novel.battleBox.hidden || !novel.houseBox.hidden;
 
   // glow：光らせる仲間の配列（data.js の glow）。渡したときは、話し手のほかを暗くせず、その仲間だけを光らせる
-  function setSpeaker(who, glow) {
+  // dim：glow のとき、光らない仲間を暗くする（data.js の行の dim。暗さは glow のない場面と同じ .char.dim）
+  function setSpeaker(who, glow, dim) {
     const c = who ? CHARS[who] : null;
     // 家の地図で appear のとき：話した仲間が、地図の上に現れる（4-3）
     if (c && NV.house) NV.house.appear(who);
@@ -486,7 +488,8 @@
     }
     for (const node of novel.chars.children) {
       node.classList.toggle("speaking", !glow && node.dataset.id === who);
-      node.classList.toggle("dim", !glow && Boolean(who) && node.dataset.id !== who);
+      node.classList.toggle("dim", glow ? Boolean(dim) && !glow.includes(node.dataset.id)
+        : Boolean(who) && node.dataset.id !== who);
       node.classList.toggle("glow", Boolean(glow) && glow.includes(node.dataset.id));
     }
   }
@@ -551,7 +554,7 @@
     const lines = NV.lines;
     let doneNow = false;
     clearTimeout(NV.autoTimer);
-    setSpeaker(ln.who, glowOf(ln));
+    setSpeaker(ln.who, glowOf(ln), ln.dim);
     if (ln.sound) SND.play(ln.sound);
     if (NV.onLine) NV.onLine(i);
     novel.mark.hidden = true;
@@ -3402,6 +3405,7 @@
           checkSound(ln.sound, at, false);
           if (ln.wait != null) warnings.push(`${at}：wait は、文のない演出の行にだけ書けます（この行では使われません）。`);
           for (const g of toArray(ln.glow)) if (!CHARS[g]) errors.push(`${at} の glow：「${g}」というキャラクターがいません。`);
+          if (ln.dim !== undefined && typeof ln.dim !== "boolean") errors.push(`${at} の dim は、true か false にしてください。`);
         }
         checkText(ln && typeof ln === "object" ? ln.text : ln, where, allow);
         const p = parseLine(ln);
@@ -3549,6 +3553,10 @@
       // 仲間を光らせる演出（glow。最終章のイーブイの答え）
       const glowLines = toArray(sc.lines).filter((ln) => ln && typeof ln === "object" && !isEffect(ln) && ln.glow !== undefined);
       if (sc.glow !== undefined && typeof sc.glow !== "boolean") errors.push(`${at} の glow は、true か false にしてください。`);
+      // dim は、glow の行（場面の glow: true か、行の glow）でだけ使う。glow のない行は、もともと話し手のほかを暗くする
+      for (const ln of toArray(sc.lines)) {
+        if (ln && typeof ln === "object" && !isEffect(ln) && ln.dim && !sc.glow && ln.glow === undefined) warnings.push(`${at}：dim は、glow の行にだけ書けます（glow のない行は、もともと話し手のほかを暗くします）。`);
+      }
       if (sc.glow || glowLines.length) {
         if (sc.mode === "chat") warnings.push(`${at}：メッセージ形式（chat）では、仲間を光らせる演出（glow）は使われません。`);
         else if (sc.house || sc.battle || sc.ice || sc.walk || sc.room || sc.puzzle) warnings.push(`${at}：キャラクターを出さない場面（地図・戦い・枠など）なので、仲間を光らせる演出（glow）は使われません。`);
