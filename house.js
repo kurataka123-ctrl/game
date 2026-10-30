@@ -145,9 +145,14 @@ const HOUSE = {
           home:   { name: "冷蔵庫", color: "#eef1f4" } },
         { x: 0, y: 2, w: 1, h: 3,
           nature: { name: "木の実の茂み", icon: "🍒", color: "#86b46a", text: "赤い木の実が、たくさんなっている。" },
-          home:   { name: "キッチン", icon: "🍳", color: "#e9dcc8" } },
+          home:   { name: "食器棚", color: "#d1b48c" } },   // 10/30 たかさん（前はキッチンとしていた）
+        // 小川は、本当の家では、上側がキッチン、下側が流し台（10/30 たかさん）。夢の見た目は1つの小川のまま
+        //   境目は【仮】で、まんなか（上から2.5マス）にした
         { x: 3, y: 0, w: 2, h: 5,
-          nature: { name: "小川", icon: "💧", color: "#a5dcf6", text: "冷たい水が、さらさら流れている。" },
+          nature: { name: "小川", icon: "💧", color: "#a5dcf6", text: "冷たい水が、さらさら流れている。" } },
+        { x: 3, y: 0, w: 2, h: 2.5,
+          home:   { name: "キッチン", icon: "🍳", color: "#e9dcc8" } },
+        { x: 3, y: 2.5, w: 2, h: 2.5,
           home:   { name: "流し台", icon: "🚰", color: "#d5dbe0" } },
         { x: 5, y: 2, w: 3, h: 2,
           nature: { name: "切り株", look: "stump", color: "#c49b64", text: "大きな切り株だ。年輪がくっきり見える。" },

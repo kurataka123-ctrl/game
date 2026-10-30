@@ -52,17 +52,23 @@
 //    set     : 条件の名前を記録する（unset で消す）。選択肢にも書ける
 //    draft   : true にすると画面に「仮の内容」と表示（作りかけの目印）
 //    ambient : その場面のあいだ、くり返し鳴らす音（sound.js の音の名前。2-7 の風）
+//    bgm     : その場面で鳴らす曲（下の SETTINGS の bgm の名前。PCの場面だけ。書かない場面は鳴らさない）
 //    mute    : true にすると、その場面では音を鳴らさない（第3部の外の場面）
 //    snow    : true にすると、雪をふらせる（エピローグ）
+//    knock   : 暗い窓の画面（iPhone）。画面は暗い窓とこの文だけになり、タップすると next へ進む
+//              （2-7 のiPhone側：ブラッキーが窓を閉じて待つ）
+//    resume  : 「つづきから」で再開するときに、代わりに始める場面（2-7 のiPhone側：暗い窓から始める）
 //
 //  【音とエフェクト】（設計書 第13節。くわしくは README の「音とエフェクト」）
 //    { text: "グレイシア：……", sound: "ice" }  → その行を出すときに、音を鳴らす（文はそのまま）
 //    { house: { … }, wait: 1200 }               → 演出の行。wait はミリ秒で、次の行まで一拍置く
 //    { sound: "star" } / { ambient: "wind" }    → 文のない行で、音だけ鳴らす／くり返す音を始める
+//    { bgm: "final" } / { bgm: null }           → 文のない行で、曲を切りかえる／止める（その場面のあいだだけ）
 //    { puzzle: "answer" }                       → 最後の謎の答えの列を、上から1字ずつ光らせる
 //    音の名前は sound.js の一覧です（?debug の 🛠 →「音の試聴」で聞けます）。
 //    iPhone の場面（mode: "chat"）では短い音だけ、mute の場面では何も鳴りません。
 //    戦いの技の音は MOVES の sound に書きます（数値を変えても、同じ技なら同じ音）。
+//    曲（BGM）は、PCの場面だけで鳴らします。曲のファイルと音量は SETTINGS の bgm に書きます。
 //
 //  【よくある書きまちがい】
 //    ・行の終わりのカンマ「,」を忘れる
@@ -97,11 +103,26 @@ const SETTINGS = {
                         //       星の場所は、遊ぶPCで ?debug →🛠→「遊ぶ前の準備：プレゼントの場所」で決める
                         // false：家の人が手渡す（「メリークリスマス」が合図）
 
-  // ---- 音（設計書 第13節。Web Audio API の合成音で、音声ファイルは使わない。鳴らす仕組みは sound.js） ----
+  // ---- 音（設計書 第13節。効果音は Web Audio API の合成音で、音声ファイルは使わない。鳴らす仕組みは sound.js） ----
+  //  曲（BGM）だけは、bgm フォルダの音声ファイルを使います（下の bgm）。
   //  遊ぶ人は、メニュー（≡）とタイトル画面の「音」のボタンで、ON/OFF を切りかえられます（端末ごとに記録）。
   //  iPhone の Safari では、最初に画面をタップするまで鳴りません。マナーモードでは鳴らないこともあります。
   sound: true,          // はじめの設定。true：鳴らす / false：鳴らさない
   inputSound: { correct: "correct", wrong: "wrong" },   // 入力欄（全体）の正解音と、責めない軽い不正解音
+
+  // ---- 曲（BGM。設計書 第13節の優先2。PCの場面だけ） ----
+  //  曲は BGMer（https://bgmer.net/）のフリー素材です（たかさんが手でダウンロードしたLONG版）。
+  //  どの場面で鳴らすかは、場面の bgm と、演出の行の { bgm: … } に書きます（README の「音とエフェクト」）。
+  //  ON/OFF は、効果音と共通の「🔊 音」のボタンです。iPhone の場面と第3部では鳴らしません。
+  //  ファイルが読めないときは、曲なしでそのまま進みます。
+  //  volume：曲の音量（0〜1）【仮】。効果音より小さくなるように、自動で測って決めました
+  //          （曲ごとの大きさの差もそろえた）。大きい・小さいと感じたら、この数を変えます
+  //          （例：0.07 → 0.1 で少し大きく）。?debug の 🛠 →「音の試聴」で、効果音と聞きくらべられます
+  bgm: {
+    dream:  { file: "bgm/bgm-dream.mp3",  volume: 0.07, label: "想い出の魔法" },     // 第1部（1-1〜1-4）と、2-7で家具に変わるまで
+    battle: { file: "bgm/bgm-battle.mp3", volume: 0.04, label: "スリルな黒タイツ" }, // 1-3 の戦い（弟戦〜合体戦）
+    final:  { file: "bgm/bgm-final.mp3",  volume: 0.08, label: "再会の誓い" },       // 4-3 で8匹がそろってから、エピローグまで
+  },
 
   // ---- 友達の呼び名（1-3 の花畑の人間組） ----
   //  文章に {friend1} のように書くと、この呼び名に置きかわります。
@@ -200,6 +221,7 @@ const SCENES = {
   forest: {
     chapter: "第1部　夢の世界",
     bg: "forest",
+    bgm: "dream",   // 曲（SETTINGS の bgm）。第1部（1-1〜1-4）は「想い出の魔法」をくり返す
     walk: "forest",
     player: "hero",          // 自分のコマ（書かなければイーブイ）
     start: [1, 0, "down"],   // リビング側の端から歩き始める
@@ -216,6 +238,7 @@ const SCENES = {
 
   // 茂みを調べると、イーブイが出てくる（ここからの会話は、歩く形にする前と同じ）
   forest_meet: {
+    bgm: "dream",
     lines: [
       "イーブイ：はっくしょん！　……あれ？　きみ、いつからそこにいたの？",
       "イーブイ：わっ、人間だ！　この世界で人間に会うなんて、初めてだよ。",
@@ -234,6 +257,7 @@ const SCENES = {
 
   // 主人公の名前を入れる（公開ページに名前を書かないため、遊ぶ人が入力する）
   forest_name: {
+    bgm: "dream",
     lines: [
       "イーブイ：ぼくはイーブイ。きみの名前は？",
     ],
@@ -245,6 +269,7 @@ const SCENES = {
   },
 
   forest_dream: {
+    bgm: "dream",
     lines: [
       "イーブイ：{name}か。いい名前だね。覚えたよ。",
       "イーブイ：ぼく、そろそろ進化してもいいころなんだ。でも、進化先が8つもあって決められない。",
@@ -269,6 +294,7 @@ const SCENES = {
   // 「一緒に行こう」のあと：イーブイがついてくる。和室側の洞窟の入口まで歩くと、1-2 へ
   //  （リビング側の窓は、いばらの茂みでふさいである。house.js の forest）
   forest_go: {
+    bgm: "dream",
     walk: "forest",
     player: "hero",
     follow: { who: "eevee", at: [1, 6] },   // ついてくる仲間と、はじめにいる場所（茂みのところ）
@@ -287,6 +313,7 @@ const SCENES = {
   //  best：最短の回数。盤面を変えたら、?debug の点検で「最短は〇回です」と出ないか確かめる
   glaceon: {
     bg: "ice",
+    bgm: "dream",
     meet: "glaceon",
     walk: "washitsu",
     lines: [
@@ -312,6 +339,7 @@ const SCENES = {
   },
 
   glaceon_ice2: {
+    bgm: "dream",
     walk: "washitsu",
     lines: [
       "グレイシアが、ふっと息を吹いた。",
@@ -345,6 +373,7 @@ const SCENES = {
   },
 
   glaceon_2: {
+    bgm: "dream",
     give: "glaceon",
     lines: [
       "グレイシア：あわてないこと。先に、止まれる場所を探すこと。氷の上の決まりは、それだけよ。",
@@ -360,6 +389,7 @@ const SCENES = {
   //  言葉を受けとったあとに、もっとむずかしい氷の床に挑戦するか選ぶ。
   //  挑戦しなくても、あきらめても、1-3 へ進める。クリアすると、グレイシアの一言が増える
   glaceon_more: {
+    bgm: "dream",
     lines: [
       "グレイシア：……行く前に、もう一つだけ。",
       "グレイシア：とっておきの氷の床があるの。さっきより、ずっと長い道よ。",
@@ -374,6 +404,7 @@ const SCENES = {
   //  グレイシアは岩にはさまれていて、下からしか近づけない。
   //  まっすぐ向かうと着かず、いったん遠ざかる道を選ぶのが考えどころ
   glaceon_ice3: {
+    bgm: "dream",
     walk: "washitsu",
     lines: [
       "グレイシアが、さっきより強く息を吹いた。",
@@ -412,6 +443,7 @@ const SCENES = {
   //  友達の呼び名（{friend1} など）は、SETTINGS の local。
   sylveon: {
     bg: "memory",
+    bgm: "dream",
     meet: "sylveon",
     walk: "living",
     start: [7, 6, "up"],     // 和室（氷の洞窟）からの出入口の前
@@ -524,6 +556,7 @@ const SCENES = {
   //  負けたときは、その戦いの最初からやり直す（合体戦で負けても、弟戦にはもどらない）。
   sylveon_snow: {
     bg: "memory",
+    bgm: "dream",
     lines: [
       "そのとき、花畑の向こうから、雪だるまが2つ転がってきた！",
       "雪だるま兄：雪だるまの仕事は、ころがって大きくなること！",
@@ -538,6 +571,7 @@ const SCENES = {
   // 弟戦：人間組（主人公と友達3人）。BATTLES の little
   sylveon_battle: {
     bg: "memory",
+    bgm: "battle",   // 戦いの曲。弟戦から合体戦まで（勝つと、第1部の曲にもどる）
     battle: "little",
     lines: [
       "雪だるま弟が、こちらへ転がってくる！",
@@ -548,6 +582,7 @@ const SCENES = {
   // 弟に勝つと、ニンフィアとイーブイがもどってくる
   sylveon_merge: {
     bg: "memory",
+    bgm: "battle",
     show: ["snowLittle", "sylveon", "eevee"],
     lines: [
       "雪だるま弟：うわーん、兄ちゃーん！",
@@ -562,6 +597,7 @@ const SCENES = {
   //  会話のときから、戦いの画面には合体雪だるまが出ている
   sylveon_battle2: {
     bg: "memory",
+    bgm: "battle",
     battle: "merged",
     lines: [
       { text: "雪だるま兄弟は、ころころと転がって、ひとつに重なった！", sound: "roll" },   // 合体で転がる音
@@ -575,6 +611,7 @@ const SCENES = {
   // 合体戦に勝つ（または、手伝ってもらう）と、合体がとける
   sylveon_win: {
     bg: "memory",
+    bgm: "dream",   // 戦いが終わったので、第1部の曲にもどす
     lines: [
       "合体がとけて、雪だるま兄弟は、元の2つにもどった。",
       "雪だるま兄：うわーっ！　みんなで来るなんて聞いてないぞー！",
@@ -586,6 +623,7 @@ const SCENES = {
 
   sylveon_word: {
     bg: "memory",
+    bgm: "dream",
     give: "sylveon",
     lines: [
       "ニンフィア：やったー！　ね、ひとりじゃ無理でも、みんなとならできたでしょ？",
@@ -601,6 +639,7 @@ const SCENES = {
   // 戦いのあと：門の氷がとけて、小道へ出られる
   sylveon_after: {
     bg: "memory",
+    bgm: "dream",
     walk: "living",
     start: [7, 6, "up"],     // （ふつうは、ニンフィアに話しかけた場所から続ける）
     lines: [
@@ -623,6 +662,7 @@ const SCENES = {
   //  玄関のほうは、白い霧で先へ進めない
   path_go: {
     bg: "forest",
+    bgm: "dream",
     walk: "path",
     start: [9, 0, "left"],   // 花畑の門から入ってきたところ
     lines: [
@@ -645,6 +685,7 @@ const SCENES = {
   // ---- 1-4 エーフィ（光の広場：洋室の形） ----
   espeon_arrive: {
     bg: "dream",
+    bgm: "dream",
     walk: "plaza",
     start: [7, 0, "down"],   // 小道からの門の前
     lines: [
@@ -660,6 +701,7 @@ const SCENES = {
 
   espeon: {
     bg: "dream",
+    bgm: "dream",
     meet: "espeon",
     give: "espeon",
     lines: [
@@ -684,6 +726,7 @@ const SCENES = {
 
   espeon_2: {
     bg: "dream",
+    bgm: "dream",
     lines: [
       "イーブイ：ブラッキーの手がかり、見つかるかな。",
       "エーフィ：見つけるのは、あなたたちよ。わたしはここから道を照らすわ。",
@@ -694,6 +737,7 @@ const SCENES = {
   // エーフィの話のあと：小道へもどり、開いた扉から夢の部屋へ
   plaza_exit: {
     bg: "dream",
+    bgm: "dream",
     walk: "plaza",
     start: [3, 2, "down"],   // （ふつうは、エーフィに話しかけた場所から続ける）
     lines: [],
@@ -706,6 +750,7 @@ const SCENES = {
 
   path_back: {
     bg: "forest",
+    bgm: "dream",
     walk: "path",
     start: [7, 1, "up"],     // 光の広場の門から出たところ（扉の真向かい）
     open: ["dream"],         // 扉が開いている（house.js の出入口の名前）
@@ -799,7 +844,8 @@ const SCENES = {
 
   // ---- 2-3 本当の部屋で探す（現実） ----
   //  ブラッキーのぬいぐるみに、QRコードのカード（下の CARDS）を結びつけておく。
-  //  QRコードが読めないときは、タイトル画面で合言葉「ゆめのへや」を入れる。
+  //  QRコードが読めないときは、タイトル画面で「ゆめのへや」を入れる（カードの文章に書いてある）。
+  //  カードには「合言葉」の欄を作らない（2-7 でエーフィに伝える言葉と取り違えないため。10/30）
 
   // ---- 2-4 ブラッキーとの通信（iPhone） ----
   // ブラッキーのぬいぐるみのQRコード（合言葉「ゆめのへや」）から始まる
@@ -855,7 +901,7 @@ const SCENES = {
     ],
     // 言葉を受けとったあとの会話（仲間の言葉は、合言葉とちがって、どこにも入れない）
     afterWord: [
-      "イーブイ：この言葉は、なかまノートにしまっておこう。どこかに入れるんじゃなくて、最後に使うんだ。",
+      "イーブイ：この言葉は、なかまノートにしまっておこう。",
     ],
     next: "vaporeon_find",
   },
@@ -1011,16 +1057,37 @@ const SCENES = {
   },
 
   // ---- 2-7 PCへ戻る（iPhone側） ----
-  //  iPhoneは、PCに出る合言葉「まどのそと」を待つ
+  //  ブラッキーが窓を閉じて待つ（暗い窓の画面）。PCでエーフィに会ってきたら、画面をタップすると、
+  //  ブラッキーが話しかけて、合言葉「まどのそと」を待つ（10/30）
   phone_to_pc: {
     mode: "chat",
     lines: [
       "イーブイ：ブースターとシャワーズにも会えたね。あとは、サンダースとリーフィア……。",
       "ブラッキー：鏡の文字が気になる。あれは、この家の中の言葉じゃない。",
       "イーブイ：エーフィなら何か分かるかも。{name}、パソコンに戻って、鏡の文字を伝えて！",
+      "ブラッキー：ぼくは窓を閉じて、ここで待っている。エーフィの話を聞いたら、窓をたたいてくれ。",
+    ],
+    next: "phone_window",
+  },
+
+  // 暗い窓：画面は暗い窓だけにして、入力欄はまだ出さない。画面をタップすると next へ（knock）
+  //  「つづきから」で再開したときも、ここから始まる（下の phone_back の resume）
+  phone_window: {
+    mode: "chat",
+    knock: "パソコンでエーフィに会ってきたら、\n画面をタップ",
+    lines: [],
+    next: "phone_back",
+  },
+
+  // 窓をたたくと、ブラッキーが出てくる。入力欄の「◀ まだ」で、暗い窓へもどる
+  phone_back: {
+    mode: "chat",
+    resume: "phone_window",   // 「つづきから」では、暗い窓から始める
+    lines: [
+      "ブラッキー：おかえり。エーフィは、何て言っていた？",
     ],
     input: {
-      prompt: "パソコンで分かった合言葉を入れよう",
+      prompt: "エーフィから聞いた合言葉",
       placeholder: "合言葉を入力",
       answers: ["まどのそと"],
       next: "out_start",
@@ -1030,6 +1097,8 @@ const SCENES = {
         "イーブイ：鏡の文字は「{station}」だったよね。",
         "イーブイ：エーフィの話を最後まで聞くと、合言葉が出るはずだよ。",
       ],
+      back: "phone_window",     // 「◀ まだ」：暗い窓へもどる（早くタップしたとき）
+      backText: "◀ まだ",
     },
   },
 
@@ -1039,6 +1108,7 @@ const SCENES = {
   //  PC側には「鏡」「スマホ」「iPhone」を出さない（何を伝えるかは、iPhoneのイーブイが知らせる。ネタバレ防止）
   pc_wait_station: {
     bg: "dream",
+    bgm: "dream",   // 2-7：エーフィのところへ戻ると、第1部の曲（家具に変わる瞬間に止める。espeon_map）
     lines: [
       "エーフィ：ブラッキーは見つかった？　わたしに伝えたいことが分かったら、教えて。",
     ],
@@ -1055,6 +1125,7 @@ const SCENES = {
   // 鏡の駅名を入れると進む（タイトル画面の「あいことばを入れる」でも同じ）
   pc_wait_station_2: {
     bg: "dream",
+    bgm: "dream",
     lines: [
       "エーフィ：何か分かったのね。わたしに聞かせて。",
     ],
@@ -1080,6 +1151,7 @@ const SCENES = {
   //  PCはiPhoneでの進み具合を知らないので、駅名を入れた時点で、一気に家全体まで広げる（設計書 第6節）
   espeon_map: {
     bg: "dream",
+    bgm: "dream",
     // PCとiPhoneの記録は別々なので、iPhoneで会った仲間と言葉を、ここで引きつぐ
     meet: ["glaceon", "sylveon", "espeon", "umbreon", "vaporeon", "flareon"],
     give: ["glaceon", "sylveon", "espeon", "umbreon", "vaporeon", "flareon"],
@@ -1088,9 +1160,10 @@ const SCENES = {
     lines: [
       "エーフィ：その駅名……。待って、そちらへ力を伸ばしてみるわ。",
       // 音とエフェクト（第13節）：地図が広がるたびに一拍置く（wait）。花畑が家具に変わる瞬間に音を鳴らす
+      //   第1部の曲は、夢の景色が家具に変わる瞬間（ここ）で止める（bgm: null）
       { house: { show: ["path", "living"] }, wait: 1200 },
       "夢の部屋の地図が、リビングまで広がっていく。",
-      { house: { home: ["path", "living"] }, sound: "furniture" },
+      { house: { home: ["path", "living"] }, sound: "furniture", bgm: null },
       "花畑の景色が、すうっと家具に変わっていった。",
       // 組み合わせは、house.js の花畑（living）の置きかえ（倒木→ソファ、切り株→テーブルなど）に合わせる
       "イーブイ：えっ……倒木がソファで、切り株がテーブルだったの？",
@@ -1412,12 +1485,14 @@ const SCENES = {
       { text: "ブースター：温かい飲み物、用意しようか。……ふぁ〜、あくびが出ちゃった。", sound: "fire" },
       { text: "サンダース：休む前にもう一周……いや、今日はみんなと話すほうが楽しそうだな！", sound: "thunder" },
       { text: "リーフィア：みんな、自分のペースでここまで来たんだね。", sound: "leaf" },
+      { bgm: "final" },   // 8匹がそろったところから、最終章の曲（エピローグまで）
       "イーブイ：……みんな、そろった。8匹全員に、一度に会えるなんて。",
     ],
     next: "final_answer",
   },
 
   final_answer: {
+    bgm: "final",   // 最終章の曲。4-3 で8匹がそろったところから（final_gather）、エピローグの終わりの画面まで
     show: ["eevee", "glaceon", "sylveon", "espeon", "umbreon", "vaporeon", "flareon", "jolteon", "leafeon"],
     lines: [
       "イーブイ：グレイシアの静かな朝。ニンフィアのにぎやかな毎日。",
@@ -1439,6 +1514,7 @@ const SCENES = {
   // ---- 4-4 息子さんへの問いかけ ----
   //  どの答えにも同じ温度で返す。答えない自由も残す
   final_question: {
+    bgm: "final",
     show: ["eevee", "glaceon", "sylveon", "espeon", "umbreon", "vaporeon", "flareon", "jolteon", "leafeon"],
     lines: [
       "イーブイ：ねえ{name}。なりたいものや、やってみたいことは、もう決まってる？",
@@ -1456,6 +1532,7 @@ const SCENES = {
   //  地図で光らせるときは、家全体の地図を出して、プレゼントの場所に星を出す（作る順番5）
   //  星の場所は、遊ぶPCで決めておく（?debug →🛠→「遊ぶ前の準備：プレゼントの場所」）
   final_present: {
+    bgm: "final",
     show: ["eevee", "glaceon", "sylveon", "espeon", "umbreon", "vaporeon", "flareon", "jolteon", "leafeon"],
     set: "presentShown",   // メニューの家の地図にも、星を出す（presentOnMap のときだけ）
     lines: [
@@ -1481,6 +1558,7 @@ const SCENES = {
   // ---- 4-6 エピローグ ----
   // ★ TRUE END（プレゼントに添えたカードのパスワード）は、あとで足す
   epilogue: {
+    bgm: "final",
     show: ["eevee", "glaceon", "sylveon", "espeon", "umbreon", "vaporeon", "flareon", "jolteon", "leafeon"],
     snow: true,   // 雪をふらせる（終わりの画面でも）
     lines: [
@@ -1760,9 +1838,10 @@ const KEYWORDS = {
 const CARDS = [
   {
     place: "ブラッキーのぬいぐるみ（リングの光が消えた場所。今は机の上）。ぬいぐるみに結びつける",
-    text: "見つけてくれて、ありがとう。\n\nぼくの声を聞くには、\nスマホのカメラで、\n下のしるしを読みとって。\n\n――ブラッキー",
-    keyword: "ゆめのへや",
-    showKeyword: true,    // QRコードが読めないときの予備（タイトル画面の「あいことばを入れる」）
+    // QRコードが読めないときの予備（タイトル画面の「あいことばを入れる」）は、文章の最後に書く
+    text: "見つけてくれて、ありがとう。\n\nぼくの声を聞くには、\nスマホのカメラで、\n下のしるしを読みとって。\n\n――ブラッキー\n\nQRコードが読めないときは、\nスマホのタイトル画面で\n『ゆめのへや』と入れる",
+    keyword: "ゆめのへや",  // QRコードに使う
+    showKeyword: false,   // 「合言葉」の欄は印刷しない（2-7 でエーフィに伝える言葉と取り違えないため。10/30）
     qr: true,
   },
   {

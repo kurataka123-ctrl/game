@@ -94,6 +94,7 @@
     <ul>
       <li>このページを印刷すると、ゲームで使うカードができます（A4用紙1枚に4枚）。</li>
       <li>文章・合言葉・QRコードの有無は、<code>data.js</code> の <code>CARDS</code> で変更できます。</li>
+      <li>文章が長いカードは、枠に収まるように、文章の字が少し小さくなります（ブラッキーのカード）。</li>
       <li>点線で切り取ってください。カードの下の「置き場所メモ」は印刷されません。</li>
       <li>ブラッキーのカードは、ぬいぐるみに結びつけてください。QRコードは、公開URLを設定すると印刷されます。</li>
       <li>おふろ場のカードは、空らんに駅名を手で書き、ラミネートや袋で防水してください。鏡に駅名を書く日は、このカードは置きません。</li>
@@ -191,6 +192,32 @@
           (c.blank ? `\n空らん：${c.blank}` : "")));
         sheet.append(wrap);
       });
+
+      // 文章が長いカードは、枠に収まるまで、文章の字を少しずつ小さくする（QRコードが枠からはみ出さないように）
+      const fit = () => {
+        for (const card of sheet.querySelectorAll(".card")) {
+          const text = card.querySelector(".text");
+          const last = card.lastElementChild;
+          text.style.fontSize = "";
+          text.style.lineHeight = "";
+          const over = () => {
+            const box = card.getBoundingClientRect();
+            const limit = box.bottom - parseFloat(getComputedStyle(card).paddingBottom);
+            return last.getBoundingClientRect().bottom > limit + 0.5;
+          };
+          let size = 11.5;   // 上の .text の大きさ（pt）と行の高さ
+          let line = 1.95;
+          while (over() && size > 8.5) {
+            size -= 0.25;
+            line = Math.max(1.6, line - 0.035);
+            text.style.fontSize = `${size}pt`;
+            text.style.lineHeight = String(line);
+          }
+        }
+      };
+      fit();
+      if (document.fonts && document.fonts.ready) document.fonts.ready.then(fit);
+      window.addEventListener("beforeprint", fit);
     })();
   </script>
 </body>
