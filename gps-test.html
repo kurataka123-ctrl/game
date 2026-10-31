@@ -147,7 +147,7 @@
   <!-- 6. GPSを使わずに試す -->
   <section class="card">
     <h2>GPSを使わずに試す（仮の値）</h2>
-    <p class="small">仮の値を2回続けて入れたことにして、本編と同じ判定と表示を試します。</p>
+    <p class="small">仮の値を2回続けて（間隔をあけて）入れたことにして、本編と同じ判定と表示を試します。</p>
     <label>ためすこと　<select id="simWhat">
       <option value="dist">距離と精度を入れて判定する</option>
       <option value="1">位置情報を拒否したとき</option>
@@ -220,6 +220,7 @@
     : d < 100000 ? `${(d / 1000).toFixed(1)} km`
     : `${Math.round(d / 1000).toLocaleString("ja-JP")} km`);
   const acc = (a) => (Number.isFinite(a) ? `±${Math.round(a)} m` : "±? m");
+  const seconds = (ms) => (Number(ms) || 0) / 1000;
   function node(tag, text, cls) {
     const n = document.createElement(tag);
     if (text != null) n.textContent = text;
@@ -289,6 +290,7 @@
   // ==============================================================
   //   found ：気配を見つけた公園の id
   //   manual：「気配を見つけたことにする」で増やした数
+  //   misses：続けて見つからなかった回数（気配なし・位置がはっきりしない）。開き直しても続ける
   //   temps ：仮の判定点（座標は "~" の形にして保存する）。現在地そのものは保存しない
   function normalize(d) {
     const src = d && typeof d === "object" ? d : {};
@@ -299,6 +301,7 @@
     return {
       found: (Array.isArray(src.found) ? src.found : []).filter((x) => typeof x === "string"),
       manual: Math.max(0, Math.floor(Number(src.manual) || 0)),
+      misses: Math.max(0, Math.floor(Number(src.misses) || 0)),
       temps,
     };
   }
@@ -473,8 +476,11 @@
     }
     SES.seen.add(key);
     const age = r.at - r.ts;
+    // 古い位置・前の読み取りに近すぎる位置は、判定に使わない（1回の確認と監視モードは、geo.js の judge が分ける）
+    const obs = SES.judge ? Object.assign(GEO.classify(parks, r.lat, r.lon, r.accuracy, CFG), { ts: r.ts }) : null;
+    const d = obs ? SES.judge.feed(obs, r.at) : GEO.isStale(r.ts, r.at, CFG) ? { skip: "stale" } : null;
     // 古い位置は数えない（maximumAge: 0 でも、iPhone は数十秒前の位置を届けることがある）
-    if (GEO.isStale(r.ts, r.at, CFG)) {
+    if (d && d.skip === "stale") {
       log(`古い位置が届いた（${(age / 1000).toFixed(1)}秒前。数えない）${tag}`);
       return;
     }
@@ -489,11 +495,13 @@
       registerFeed(r, tag + ageText);
       return;
     }
-    const obs = GEO.classify(parks, r.lat, r.lon, r.accuracy, CFG);
-    const d = SES.judge.feed(obs);
+    const where = `${SES.mode === "watch" ? "［監視］" : ""}精度${acc(obs.accuracy)}／${obs.label || "公園"}まで${meters(obs.distance)} → ${KIND[obs.kind]}`;
+    if (d && d.skip === "close") {
+      log(`${where}（前の読み取りから${(d.since / 1000).toFixed(1)}秒。${seconds(CFG.minGap)}秒たっていないので数えない）${tag}${ageText}`);
+      return;
+    }
     const run = SES.judge.run();
-    log(`${SES.mode === "watch" ? "［監視］" : ""}精度${acc(obs.accuracy)}／${obs.label || "公園"}まで${meters(obs.distance)}`
-      + ` → ${KIND[obs.kind]}${obs.kind === "poor" ? "" : `（${run.n}/${run.need}）`}${tag}${ageText}`);
+    log(`${where}${obs.kind === "poor" ? "" : `（${run.n}/${run.need}）`}${tag}${ageText}`);
     if (!d) return;
     if (SES.mode === "watch") {
       // 監視モード：まだ数えていない公園で見つけたら、ヒントを一度だけ出して止める
@@ -611,7 +619,6 @@
     let guide = "";
     if (d.result === "found") {
       if (!rec.found.includes(d.park)) rec.found.push(d.park);
-      save();
       const n = count();
       kind = n >= CFG.need ? "reached" : "found";
       line = GEO.hintFor(n, CFG);
@@ -626,20 +633,29 @@
       detail = `いちばん近い判定点（${d.label}）まで ${meters(d.distance)}（半径 ${CFG.radius} m）、精度 ${acc(d.accuracy)}。`;
     } else if (d.result === "unclear") {
       line = TEXT.unclear;
-      detail = (d.sawIn ? `範囲内の読み取りはあったが、${CFG.streak}回続かなかった。` : "")
-        + `精度がいちばん良かったときで ${acc(d.best)}（上限 ${CFG.accuracy} m）。`;
-      if (d.best >= CFG.poorAccuracy) guide = "precise";
+      if (d.staleOnly) detail = `新しい位置（${seconds(CFG.staleAfter)}秒以内に測ったもの）が届かなかった（古い位置だけが${d.stale}回届いた）。`;
+      else {
+        detail = (d.sawIn ? `範囲内の読み取りはあったが、${CFG.streak}回続かなかった。` : "")
+          + `精度がいちばん良かったときで ${acc(d.best)}（上限 ${CFG.accuracy} m）。`;
+        if (Number.isFinite(d.best) && d.best >= CFG.poorAccuracy) guide = "precise";
+      }
     } else {
       kind = "error";
       detail = `${ERR[d.code] || "エラー"}。${d.noAnswer ? "位置も返事も届かなかった。" : ""}`;
       guide = GUIDE_OF_CODE[d.code] || "";
     }
+    // 続けて見つからなかった回数を進める（見つけたら0。もう数えた公園では変えない）
+    const step = GEO.missStep(rec.misses, kind, CFG);
+    rec.misses = step.misses;
+    save();
+    if (kind === "none" || kind === "unclear") detail += `続けて見つからなかった回数 ${rec.misses}（${CFG.manualAfter}回で「見つけたことにする」を出す）。`;
     if (how) detail = `${how}。${detail}`;
     if (d.sim) detail = `（仮の値）${detail}`;
     showResult(kind, line, detail, guide);
-    // 「気配を見つけたことにする」は、見つからなかったあと（気配なし・位置不明・エラー）だけ出す
-    $("manualBtn").hidden = !["none", "unclear", "error"].includes(kind);
-    log(`結果：${BADGE[kind]}${kind === "found" || kind === "reached" ? `（${count()}公園目）` : ""}`);
+    // 「気配を見つけたことにする」は、続けて manualAfter 回見つからなかったあと（エラーのときは1回目から）だけ出す
+    $("manualBtn").hidden = !step.manual;
+    log(`結果：${BADGE[kind]}${kind === "found" || kind === "reached" ? `（${count()}公園目）` : ""}`
+      + (kind === "none" || kind === "unclear" ? `（続けて見つからなかった回数 ${rec.misses}/${CFG.manualAfter}）` : ""));
     renderCount();
     renderTable();
   }
@@ -673,7 +689,8 @@
   function renderCount() {
     const n = count();
     $("count").textContent = `${n} / ${CFG.need}${n >= CFG.need ? "（達した）" : ""}`;
-    $("countNote").textContent = `公園で見つけた ${foundIds().length}・「見つけたことにする」${rec.manual}`;
+    $("countNote").textContent = `公園で見つけた ${foundIds().length}・「見つけたことにする」${rec.manual}`
+      + `・続けて見つからなかった回数 ${rec.misses}/${CFG.manualAfter}`;
   }
 
   function renderNow() {
@@ -741,11 +758,13 @@
       ["半径", `${CFG.radius} m`],
       ["精度の上限", `${CFG.accuracy} m`],
       ["続けて満たす回数", `${CFG.streak}回`],
+      ["続けて数える読み取りの間隔", `${seconds(CFG.minGap)}秒以上（近すぎる読み取りは数えない）`],
       ["必要な公園の数", `${CFG.need}`],
       ["1回の確認で測る時間", `${(Number(CFG.timeout) || 15000) / 1000}秒（最初の位置か返事が届いてから）`],
       ["精度がとても低い目安", `${CFG.poorAccuracy} m 以上`],
       ["取得の設定", `enableHighAccuracy: ${CFG.highAccuracy !== false}／maximumAge: ${Number(CFG.maximumAge) || 0}`],
-      ["数えない古い位置", `${(Number(CFG.staleAfter) || 0) / 1000}秒より前に測った位置`],
+      ["数えない古い位置", `${seconds(CFG.staleAfter)}秒より前に測った位置`],
+      ["「見つけたことにする」を出す", `続けて${CFG.manualAfter}回見つからなかったあと（エラーは1回目から）`],
       ["公園（geo.js）", `${cfgParks.length}か所・判定点 ${points}点${allDraft ? "（座標は【仮】）" : ""}`],
       ["仮の公園", `${rec.temps.length}か所`],
       ["この端末の保存名", `${STORE_KEY}（本編の記録とは別）`],
@@ -830,6 +849,7 @@
   // 「気配を見つけたことにする」：数を1つ増やす（公園名も番号も出さない）
   $("manualBtn").addEventListener("click", () => {
     rec.manual += 1;
+    rec.misses = GEO.missStep(rec.misses, "manual", CFG).misses;
     save();
     const n = count();
     const kind = n >= CFG.need ? "reached" : "found";
@@ -905,8 +925,10 @@
     }
     const judge = GEO.judge(CFG, foundIds(), {});
     const obs = { kind: GEO.kindOf(dist, accuracy, CFG), park: park.id, label: park.label, point: 0, distance: dist, accuracy };
-    log(`（仮の値）精度${acc(accuracy)}／${park.label}まで${meters(dist)} → ${KIND[obs.kind]}（2回続けて入れた）`);
-    const d = judge.feed(obs) || judge.feed(obs) || judge.finish();
+    log(`（仮の値）精度${acc(accuracy)}／${park.label}まで${meters(dist)} → ${KIND[obs.kind]}（${seconds(CFG.minGap)}秒あけて2回入れた）`);
+    const t = Date.now();
+    const t2 = t + (Number(CFG.minGap) || 0);
+    const d = judge.feed(Object.assign({}, obs, { ts: t }), t) || judge.feed(Object.assign({}, obs, { ts: t2 }), t2) || judge.finish();
     conclude(Object.assign(d, { sim: true }));
   });
 
@@ -914,7 +936,8 @@
     const head = [
       `GPSテストの記録（${new Date(openedAt).toLocaleDateString("ja-JP")} ${clock(openedAt)} に開いたページ）`,
       `端末：${navigator.userAgent}`,
-      `設定：半径${CFG.radius}m・精度の上限${CFG.accuracy}m・${CFG.streak}回続けて・必要な公園${CFG.need}・${(Number(CFG.timeout) || 15000) / 1000}秒`,
+      `設定：半径${CFG.radius}m・精度の上限${CFG.accuracy}m・${CFG.streak}回続けて（${seconds(CFG.minGap)}秒以上あける）・必要な公園${CFG.need}`
+        + `・${(Number(CFG.timeout) || 15000) / 1000}秒・古い位置${seconds(CFG.staleAfter)}秒・手動のボタン${CFG.manualAfter}回`,
     ];
     copyText(head.concat(logLines.slice().reverse()).join("\n"), $("logField"), (ok) => {
       $("logMsg").textContent = ok ? `記録をコピーしました（${logLines.length}行）。` : "自動でコピーできませんでした。上の欄から手でコピーしてください。";
@@ -922,9 +945,10 @@
   });
 
   $("resetBtn").addEventListener("click", () => {
-    if (!window.confirm("数えた結果（見つけた公園と、「見つけたことにする」の数）を0にもどします。仮の判定点は残ります。")) return;
+    if (!window.confirm("数えた結果（見つけた公園・「見つけたことにする」の数・続けて見つからなかった回数）を0にもどします。仮の判定点は残ります。")) return;
     rec.found = [];
     rec.manual = 0;
+    rec.misses = 0;
     save();
     $("result").hidden = true;
     $("manualBtn").hidden = true;
