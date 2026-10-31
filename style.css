@@ -1634,6 +1634,7 @@ button { font: inherit; color: inherit; touch-action: manipulation; }
 .search-buttons .quick-btn { align-self: center; }
 .search-wait { padding: 12px 0; font-size: 15px; animation: search-wait 1.4s ease-in-out infinite; }
 @keyframes search-wait { 0%, 100% { opacity: 1; } 50% { opacity: .45; } }
+.chat-foot > .search-cancel { width: auto; align-self: center; }
 /* 台詞の下に出す小さな案内（設定の場所など）。角丸の囲みにして、長い文も読みやすく */
 .msg.system.search-note .bubble { border-radius: 12px; text-align: left; line-height: 1.5; font-size: 12.5px; }
 
