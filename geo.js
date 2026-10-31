@@ -273,6 +273,7 @@
   //   o.onTick()、o.onPoke()：0.5秒ごと／取りにいったとき（表示と記録のため）
   //   → { stop(), fresh(), info() }
   function track(o) {
+    const started = Date.now();
     const cfg = o.cfg || {};
     const geo = o.geo;
     const limit = Boolean(o.limit);
@@ -374,7 +375,7 @@
       },
       // left：残りの秒数（最初の位置か返事が届く前は null）
       info: () => ({
-        alive, first, fresh, unavailable,
+        alive, first, fresh, unavailable, started,
         left: first ? Math.max(0, Math.ceil((first + timeout - Date.now()) / 1000)) : null,
       }),
     };
@@ -441,6 +442,14 @@
     };
   }
 
+  // 「やめる」を出すか：測り始めてから cancelAfter たっても、位置も返事も届いていない
+  //   押したときは、時間切れと同じ扱いにする（CANCELLED の結果。取得失敗・時間切れの文と案内）
+  function cancelable(info, cfg) {
+    const after = Number(cfg.cancelAfter) || 15000;
+    return Boolean(info && !info.first && Date.now() - info.started >= after);
+  }
+  const cancelled = () => ({ result: "error", code: 3, noAnswer: true, cancelled: true });
+
   // この端末・このページで位置情報を使えるか（https:// で開いた公開ページなど）
   function usable(nav, win) {
     return Boolean(nav && nav.geolocation) && (!win || win.isSecureContext !== false);
@@ -448,6 +457,6 @@
 
   window.GEO = {
     hide, unhide, distance, parsePoint, parksFrom, readParks, nearest, kindOf, classify,
-    judge, missStep, hintFor, lineFor, isStale, track, check, usable,
+    judge, missStep, hintFor, lineFor, isStale, track, check, usable, cancelable, cancelled,
   };
 })();

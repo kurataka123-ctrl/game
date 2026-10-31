@@ -434,6 +434,7 @@
         + (lastPos && SES.readings ? `。最後の読み取り ${clock(lastPos.at)}` : "。位置を待っています");
       return;
     }
+    if (SES.mode === "check" && $("cancelBtn").hidden && GEO.cancelable(inf, CFG)) $("cancelBtn").hidden = false;
     const what = SES.mode === "check" ? "測っています" : "登録のために測っています";
     let run = "";
     if (SES.mode === "check" && inf.run) {
@@ -720,6 +721,7 @@
       ["1回の確認で測る時間", `${(Number(CFG.timeout) || 15000) / 1000}秒（最初の位置か返事が届いてから）`],
       ["最初の位置を待つ上限", `${seconds(CFG.firstWait)}秒（何も届かなければ時間切れ）`],
       ["こちらから取りにいく", `新しい位置が${seconds(CFG.pokeAfter)}秒来ないとき`],
+      ["「やめる」を出す", `測り始めてから${seconds(CFG.cancelAfter)}秒たっても、位置も返事も届かないとき（押すと時間切れと同じ扱い）`],
       ["精度がとても低い目安", `${CFG.poorAccuracy} m 以上`],
       ["取得の設定", `enableHighAccuracy: ${CFG.highAccuracy !== false}／maximumAge: ${Number(CFG.maximumAge) || 0}`],
       ["数えない古い位置", `${seconds(CFG.staleAfter)}秒より前に測った位置`],
@@ -748,7 +750,8 @@
     $("checkBtn").disabled = busy;
     $("checkBtn").textContent = SES.mode === "check" ? "確認しています…" : "現在地を確認";
     $("progress").hidden = !checking;
-    $("cancelBtn").hidden = !checking;
+    // 「やめる」：登録はすぐ出す。1回の確認は、本編と同じく、位置も返事も届かないまま cancelAfter たってから出す
+    $("cancelBtn").hidden = !(SES.mode === "register" || (SES.mode === "check" && GEO.cancelable(SES.info, CFG)));
     $("tempBtn").disabled = busy;
     $("tempBtn").textContent = SES.mode === "register" ? "登録のために測っています…" : "今いる場所を仮の判定点にする";
     $("tempClearBtn").disabled = busy || !rec.temps.length;
@@ -801,8 +804,14 @@
   $("cancelBtn").addEventListener("click", () => {
     const mode = SES.mode;
     stop();
-    log(mode === "register" ? "登録をやめた" : "確認をやめた");
-    if (mode === "register") $("tempMsg").textContent = "登録をやめました。";
+    if (mode === "register") {
+      log("登録をやめた");
+      $("tempMsg").textContent = "登録をやめました。";
+      return;
+    }
+    // 1回の確認：本編と同じく、時間切れと同じ扱い（取得失敗・時間切れの文と、手動のボタン）
+    log("確認をやめた（位置も返事も届かなかったので、時間切れと同じ扱い）");
+    conclude(GEO.cancelled(), "「やめる」を押した");
   });
 
   // 「気配を見つけたことにする」：数を1つ増やす（公園名も番号も出さない）

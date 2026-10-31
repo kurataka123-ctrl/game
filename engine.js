@@ -2908,7 +2908,10 @@
         chat.foot.replaceChildren(el("div", { class: "foot-prompt search-wait", text: T("searchWait") }));
         CV.wait = false;
         const typing = CHARS.eevee ? addTyping("eevee") : null;
+        let ended = false;
         const finish = (d) => {
+          if (ended) return;
+          ended = true;
           if (typing) typing.remove();
           result(d);
         };
@@ -2919,10 +2922,21 @@
         let run = null;
         run = GEO.check({
           cfg: PARK, geo: navigator.geolocation, parks: parkList(), found: state.parks,
-          onTick: () => {
-            if (token === gen || !run) return;
-            run.stop();
-            if (typing) typing.remove();
+          onTick: (info) => {
+            if (!run) return;
+            if (token !== gen) {
+              run.stop();
+              if (typing) typing.remove();
+              return;
+            }
+            // 位置も返事も届かないまま、しばらくたったら「やめる」を出す（押すと、時間切れと同じ扱い）
+            if (!chat.foot.querySelector(".search-cancel") && GEO.cancelable(info, PARK)) {
+              chat.foot.append(el("button", {
+                type: "button", class: "quick-btn search-cancel", text: T("searchCancel"),
+                onclick: () => { run.stop(); finish(GEO.cancelled()); },
+              }));
+              scrollChat();
+            }
           },
           onDone: (d) => { if (token === gen) finish(d); },
         });
@@ -2973,6 +2987,8 @@
     CV.skip = null;
     // 歩いている途中の場面にもどったとき（会話のあと・つづきから）は、はじめの会話をくり返さない
     const backToWalk = Boolean(walking(sc) && state.walk && state.walk.scene === id);
+    // 公園で気配を探す場面は、1つでも見つけていたら、はじめの会話を出さない（最後のヒントの文から）
+    const skipLines = backToWalk || Boolean(sc.search && parkCount() > 0);
     state.scene = id;
     state.atEnd = false;
     state.chapter = sc.chapter || (jump ? inherited(id, "chapter") : state.chapter);
@@ -2992,7 +3008,7 @@
     // 選択肢・入力がある場面は、最後の行のあとすぐに表示する
     // （地図を調べる・歩く・氷の床の場面は、最後の行を読み終えてから始める）
     const waitsForPlayer = Boolean(hasChoices(sc) || sc.input);
-    view.say(backToWalk ? [] : sc.lines, () => afterLines(sc, view), !waitsForPlayer);
+    view.say(skipLines ? [] : sc.lines, () => afterLines(sc, view), !waitsForPlayer);
   }
 
   // room: "look" は地図を見せるだけ（調べない）
@@ -3408,7 +3424,7 @@
     "keywordTitle", "keywordNote", "keywordPlaceholder", "keywordSubmit", "keywordOk", "keywordWrong",
     "keywordEmpty", "keywordReceived", "keywordResume", "keywordStart", "back",
     "inputPrompt", "inputPlaceholder", "namePlaceholder", "submit", "send", "hint", "chatHint", "chatHintSay", "inputBack",
-    "skip", "wrong", "next", "draft", "chatTitle", "searchButton", "searchWait", "searchManual",
+    "skip", "wrong", "next", "draft", "chatTitle", "searchButton", "searchWait", "searchManual", "searchCancel",
     "wordGet", "wordFrom", "wordGetChat", "wordNote", "ok", "metToast",
     "partyTitle", "partyNote", "partyNoteMet", "partyNoteAll", "close",
     "menuTitle", "menuParty", "menuMap", "menuHouseMap", "menuToTitle", "menuNote",
@@ -3778,7 +3794,7 @@
     };
     num("radius", 1); num("accuracy", 1); num("poorAccuracy", 1);
     num("streak", 1, true); num("need", 1, true); num("manualAfter", 1, true);
-    num("timeout", 1000); num("firstWait", 1000); num("pokeAfter", 500);
+    num("timeout", 1000); num("firstWait", 1000); num("pokeAfter", 500); num("cancelAfter", 1000);
     num("minGap", 0); num("staleAfter", 0); num("maximumAge", 0);
     if (typeof g.highAccuracy !== "boolean") errors.push("SETTINGS の gps の highAccuracy は、true か false にしてください。");
     const from = GEO.parksFrom(g.parks, S.hidden);
