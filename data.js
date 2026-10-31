@@ -14,7 +14,6 @@
 //      {name}    → 主人公の名前（1-1 のPC、2-4 のiPhoneで入力したもの）
 //      {friend1} → 友達の呼び名（SETTINGS の local。ふだんは default の呼び名）
 //      {station} → 鏡に書く駅名（SETTINGS の hidden から）
-//      {park}    → リーフィアのいる公園の名前（同上）
 //
 //  【条件つきの行】 設定や選んだ道によって、出す行を変えます
 //    { if: "indoor", text: "サンダース：……" }      → indoor のときだけ出す
@@ -61,6 +60,10 @@
 //    knock   : 暗い窓の画面（iPhone）。画面は暗い窓とこの文だけになり、タップすると next へ進む
 //              （2-7 のiPhone側：ブラッキーが窓を閉じて待つ）
 //    resume  : 「つづきから」で再開するときに、代わりに始める場面（2-7 のiPhone側：暗い窓から始める）
+//    search  : 公園で気配を探す（iPhone。GPSヒント機能。3-1 と 3-2 のあいだの leafeon_search）。
+//              「気配を探す」ボタンを出し、位置を測って、結果のイーブイの文を出す。
+//              必要な数の公園で見つけたら「つづける ▶」で next へ進む。中身は leafeon_search を参照
+//    parkReset : true にすると、その場面に入ったときに、公園で見つけた記録を空にする（3-0 の out_start）
 //
 //  【音とエフェクト】（設計書 第13節。くわしくは README の「音とエフェクト」）
 //    { text: "グレイシア：……", sound: "ice" }  → その行を出すときに、音を鳴らす（文はそのまま）
@@ -141,11 +144,61 @@ const SETTINGS = {
 
   // ---- 表示用に隠した文字（元に戻せる形） ----
   //  ページに直接書きたくない地名を、読めない形で書いておきます。
-  //  文章の {station} {park} の位置に、元の文字で表示されます。
+  //  文章の {station} の位置に、元の文字で表示されます。
   //  作り方：?debug を付けて開き、🛠 →「表示用に隠す」（README 4章）
   hidden: {
     station: "~hub3hua9h/Higu7M",  // 鏡に書く駅名（カタカナ）。鏡の場面でスキップしたときに表示
-    park: "~jPjkjfSkh/PLh87L",     // リーフィアのいる公園の名前
+
+    // 公園の判定する点（GPSヒント機能。下の gps の parks から使う）。文章には使わない
+    //   「緯度,経度」（例：12.345678,123.456789）を、🛠 →「表示用に隠す」に入れて作る
+    parkA: "~VlBYUFwcVkBXTVxRVVhUVhxXRVQ=",
+    parkB: "~VlBYUFwcV0VTTVxRVVhUVh1UQFM=",
+    parkC: "~VlBYUFwfU0tQTVxRVVhUVh1cQlw=",
+    parkD: "~VlBYUFwdUUVcTVxRVVhUVhhWRF0=",
+    parkE: "~VlBYUF0VU0ZUTVxRVVhUVhlVSlQ=",
+    parkF: "~VlBYUF0aUUFRTVxRVVhUVhtWQV0=",
+    parkG: "~VlBYUFwcVkJXTVxRVVhUVhVTQFQ=",
+    parkH: "~VlBYUFweUkNcTVxRVVhUVhVXRVc=",
+    parkI1: "~VlBYUFwbV0dWTVxRVVhUVhtTQVY=",   // 公園I（入口3つ）
+    parkI2: "~VlBYUFwZU0BRTVxRVVhUVhVQR1w=",
+    parkI3: "~VlBYUFwYVEVVTVxRVVhUVhtcSlM=",
+  },
+
+  // ---- 公園で気配を探す（GPSヒント機能。3-1 と 3-2 のあいだ。iPhoneの公開ページだけで使う） ----
+  //  判定の計算は geo.js、イーブイの文は場面 leafeon_search の search、ボタンの文字は UI にあります。
+  //  数値は、本当の公園でのテストのあとで調整します（今は初期値）。テストページ gps-test.html も、ここを読みます。
+  gps: {
+    radius: 50,          // 判定する点からの半径（m）。この内側を「範囲内」とする
+    accuracy: 30,        // 位置の精度（accuracy）の上限（m）。これより粗い位置では、見つけたことにしない
+    streak: 2,           // 範囲内（または範囲外）が何回続いたら、結果を決めるか
+    minGap: 2000,        // 続けて数える読み取りの間隔（ミリ秒）。前の読み取りから、これ以上あとに測った位置だけ数える
+                         // （iPhone は2つの位置を同時に届けることがある。10/31 の実機で確認）
+    need: 3,             // 気配を見つける必要がある公園の数。この数に達したら、3-2（リーフィア）へ進む
+    timeout: 15000,      // 1回の確認で、位置を測り続ける時間（ミリ秒）。最初の位置（または返事）が届いてから数える
+    firstWait: 60000,    // 最初の位置（または返事）を待つ上限（ミリ秒）。何も届かなければ、時間切れにする
+    pokeAfter: 3000,     // 新しい位置がこの時間（ミリ秒）来ないときは、こちらから1回取りにいく
+    staleAfter: 10000,   // これより前に測った位置（ミリ秒）は、届いても数えない
+                         // （maximumAge: 0 でも、iPhone は数十秒前の位置を届けることがある。10/31 の実機で確認）
+    poorAccuracy: 300,   // 精度がこれより粗いときは、「正確な位置情報」がオフかもしれないと案内する（m）
+    manualAfter: 3,      // 「気配を見つけたことにする」を出すまでに、続けて見つからなかった回数
+                         // （気配なし・位置がはっきりしない。エラーのときは1回目から出す）
+    highAccuracy: true,  // enableHighAccuracy（GPS を使って、細かく測る）
+    maximumAge: 0,       // 前に測った位置を使い回さない（ミリ秒）
+
+    //  公園と、判定する点。どの点で見つけても、同じ1公園として数える（大きい公園は、入口ごとに点を書く）
+    //    points：SETTINGS の hidden の名前（座標はそこに隠した形で書く）
+    //    label ：テストページの表に出す名前（本編には出さない）。本当の公園名は書かない
+    parks: [
+      { id: "parkA", label: "公園A", points: ["parkA"] },
+      { id: "parkB", label: "公園B", points: ["parkB"] },
+      { id: "parkC", label: "公園C", points: ["parkC"] },
+      { id: "parkD", label: "公園D", points: ["parkD"] },
+      { id: "parkE", label: "公園E", points: ["parkE"] },
+      { id: "parkF", label: "公園F", points: ["parkF"] },
+      { id: "parkG", label: "公園G", points: ["parkG"] },
+      { id: "parkH", label: "公園H", points: ["parkH"] },
+      { id: "parkI", label: "公園I（入口3つ）", points: ["parkI1", "parkI2", "parkI3"] },
+    ],
   },
 
   // ---- PCだけで使うイラスト（インターネットには出さない） ----
@@ -1266,6 +1319,8 @@ const SCENES = {
     chapter: "第3部　窓の外へ",
     mode: "chat",
     chatTitle: "イーブイ・ブラッキー",
+    // 公園で見つけた記録を空にする（合言葉「まどのそと」で始め直したときに、前の記録が残らないように）
+    parkReset: true,
     // 合言葉「まどのそと」から始めたときのために、それまでの仲間と言葉を引きつぐ
     meet: ["glaceon", "sylveon", "espeon", "umbreon", "vaporeon", "flareon"],
     give: ["glaceon", "sylveon", "espeon", "umbreon", "vaporeon", "flareon"],
@@ -1343,14 +1398,60 @@ const SCENES = {
     mute: true,   // 第3部（外）では音を鳴らさない
     mode: "chat",
     lines: [
-      { unless: "indoor", text: "サンダース：リーフィアなら{park}にいるぜ。オレなら30秒、きみたちなら……ゆっくり歩いて10分ってとこかな。" },
+      { unless: "indoor", text: "サンダース：リーフィアは緑が好きでさ。この近くの公園のどこかにいるはずだ。" },
+      { unless: "indoor", text: "サンダース：公園に着いたら、立ち止まって気配を探してみな。何か所か回れば会えるはずだぜ。" },
       { unless: "indoor", text: "サンダース：走るのはオレの仕事。きみは前を見て歩けよ！" },
       { if: "indoor", text: "サンダース：リーフィアも連れてきたぜ。リビングの窓の外を見てみな！" },
     ],
     choices: [
-      { unless: "indoor", text: "公園に着いた", next: "leafeon_meet" },
-      { if: "indoor", text: "窓の外を見る", next: "leafeon_meet" },
+      { unless: "indoor", text: "公園に着いた", next: "leafeon_search" },   // 公園で気配を探す（GPSヒント機能）
+      { if: "indoor", text: "窓の外を見る", next: "leafeon_meet" },         // 家の中の道は、公園を通らない
     ],
+  },
+
+  // ---- 3-1と3-2のあいだ：公園で気配を探す（GPSヒント機能） ----
+  //  「気配を探す」を押すと、位置を最大15秒ほど測り、イーブイが結果を話す（判定の決まりは SETTINGS の gps）。
+  //  公園の順番は問わず、同じ公園は二度数えない。見つけた数や必要な数は、画面に出さない（文の変化で伝える）。
+  //  必要な数に達したら「つづける ▶」で next（3-2）へ。
+  //  見つからないときは、続けて3回（manualAfter）のあと、エラーのときは1回目から「気配を見つけたことにする」を出す
+  //  （PCなど、位置を取れない端末でも、このボタンで最後まで進める）。
+  //  「つづきから」では、数を出さず、最後に出たヒントの文をもう一度出す（まだ1つも見つけていなければ、ボタンから）。
+  //  search の中の文：
+  //    found：見つけたとき。first は1公園目、more は途中の公園（何公園目でも同じ文）、reached は必要な数に達したとき
+  //    none・unclear・already：気配なし・位置がはっきりしない・もう数えた公園
+  //    denied・failed・poor・unsupported：拒否・取得失敗と時間切れ・精度がとても低い・位置情報を使えないページ（PCなど）
+  //      text はイーブイの文。note は台詞の下に小さく出す案内（設定の場所など。なければ書かない）
+  leafeon_search: {
+    mute: true,   // 第3部（外）では音を鳴らさない
+    mode: "chat",
+    lines: [],
+    search: {
+      found: {
+        first: "イーブイ：近くに草の気配がする！　リーフィア、このあたりを通ったんだ。",
+        more: "イーブイ：また草の気配！　さっきより強くなってる。",
+        reached: "イーブイ：すごく強い気配……すぐそこにいる！",
+      },
+      none: "イーブイ：このあたりには、気配がないみたい。",
+      unclear: "イーブイ：気配がうまくつかめない。空の見える所で、もう一度ためしてみて。",
+      already: "イーブイ：ここの気配は、もう見つけた。ほかの公園を探してみよう。",
+      denied: {
+        text: "イーブイ：位置を使えないみたい。設定を直すか、下のボタンで進もう。",
+        note: "設定の場所：Safari のアドレス欄の「ぁあ」→「Webサイトの設定」→「位置情報」を「許可」にして、もう一度「気配を探す」を押す。",
+      },
+      failed: {
+        text: "イーブイ：今は気配が届かないみたい。少し動いて、もう一度ためしてみて。",
+        note: "続くときは、設定 →「プライバシーとセキュリティ」→「位置情報サービス」がオンか確かめる。",
+      },
+      poor: {
+        text: "イーブイ：気配がぼんやりしすぎてる。「正確な位置情報」がオンか見てみて。",
+        note: "設定の場所：設定 →「プライバシーとセキュリティ」→「位置情報サービス」→「Safari Webサイト」→「正確な位置情報」。",
+      },
+      unsupported: {
+        text: "イーブイ：位置を使えないみたい。設定を直すか、下のボタンで進もう。",
+        note: "位置を使えるのは、iPhone で公開ページ（https:// で始まるURL）を開いたときです。",
+      },
+    },
+    next: "leafeon_meet",
   },
 
   // ---- 3-2 リーフィア（公園・冬芽） ----
@@ -1948,6 +2049,9 @@ const UI = {
   chatHint: "💡 ヒントをもらう",
   chatHintSay: "ヒントがほしい！",
   inputBack: "◀ もどる",       // 入力欄の「もどる」ボタン（場面の input に back を書いたとき）
+  searchButton: "気配を探す",                 // 公園で気配を探す（3-1と3-2のあいだ）のボタン
+  searchWait: "気配を探しています……",          // 位置を測っているあいだ、ボタンの代わりに出す文
+  searchManual: "気配を見つけたことにする",     // 見つからないときに出す、数を1つ増やすボタン
   skip: "どうしてもわからない",
   wrong: "……ちがうみたい。もう一度ためしてみよう。",
   next: "つづける ▶",

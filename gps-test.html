@@ -13,7 +13,8 @@
   <!--
     GPSヒント機能（公園で「気配」を探す）を試すページです。
     ・本編（index.html）の記録には触れません。保存名は eevee-gps-test だけを使います。
-    ・本編のファイル（engine.js など）は読みこみません。判定の仕組みと設定値は geo.js にあります。
+    ・本編と同じ data.js（設定値・公園の座標・イーブイの文）と geo.js（判定の計算）を読みこみます。
+      engine.js など、ほかの本編のファイルは読みこみません。
     ・現在地は、外部へ送らず、保存もしません（「仮の判定点」に登録した点だけ、この端末に保存）。
   -->
   <style>
@@ -175,7 +176,7 @@
 
   <!-- 8. 設定値とリセット -->
   <section class="card">
-    <h2>設定値（geo.js）</h2>
+    <h2>設定値（data.js の SETTINGS.gps）</h2>
     <dl id="settings"></dl>
     <ul id="problems" class="problems" hidden></ul>
     <button id="resetBtn" class="btn danger" type="button">数えた結果をリセット</button>
@@ -189,6 +190,8 @@
 </main>
 <noscript>このページを使うには、JavaScript を有効にしてください。</noscript>
 
+<!-- 設定値・公園の座標・イーブイの文は、本編と同じ data.js から読む（変えるのは data.js の1か所だけ） -->
+<script src="data.js"></script>
 <script src="geo.js"></script>
 <script>
 (() => {
@@ -198,18 +201,21 @@
   // ==============================================================
   // 0. 準備
   // ==============================================================
-  if (!window.GEO) {
+  const tryGet = (fn) => { try { return fn(); } catch (e) { return undefined; } };
+  const DATA = tryGet(() => SETTINGS);
+  const SCENE_LIST = tryGet(() => SCENES) || {};
+  if (!window.GEO || !DATA || !DATA.gps) {
     $("notice").hidden = false;
-    $("notice").textContent = "geo.js を読みこめませんでした。gps-test.html と同じ場所に geo.js があるか確かめてください。";
+    $("notice").textContent = "data.js か geo.js を読みこめませんでした。gps-test.html と同じ場所に両方があるか、data.js に SETTINGS.gps があるか確かめてください。";
     return;
   }
-  const CFG = GEO.settings;
-  const TEXT = CFG.text || {};
+  const CFG = DATA.gps;
+  // イーブイの文：本編の、公園で気配を探す場面（search のある場面。leafeon_search）から読む
+  const SEARCH_ID = Object.keys(SCENE_LIST).find((id) => SCENE_LIST[id] && SCENE_LIST[id].search) || "";
+  const TEXT = SEARCH_ID ? SCENE_LIST[SEARCH_ID].search : {};
   const STORE_KEY = "eevee-gps-test";   // 本編の保存名（eevee-xmas-save-v3 …）とは別
   const MAX_TEMP_PARKS = 5;             // 仮の公園の数の上限
   const MAX_TEMP_POINTS = 3;            // 仮の公園1つあたりの判定点の上限（大きい公園の入口）
-  const POKE_AFTER = 3000;              // 新しい位置がこの時間（ミリ秒）来ないときは、こちらから取りにいく
-  const FIRST_WAIT = 60000;             // 最初の位置（または返事）を待つ上限（許可の確認に答える時間を含む）
   const LOG_MAX = 200;                  // 記録に残す行の数
   const openedAt = Date.now();
 
@@ -318,14 +324,16 @@
     if (!store.save(rec)) showNotice("この端末に記録できませんでした（プライベートブラウズなど）。ページを閉じると、数えた結果が消えます。");
   }
 
-  // 公園の一覧：geo.js の公園 ＋ 仮の公園
+  // 公園の一覧：data.js の公園（SETTINGS.gps.parks。座標は SETTINGS.hidden）＋ 仮の公園
   let parks = [];
   let problems = [];
   function rebuildParks() {
-    const a = GEO.readParks(CFG.parks);
+    const from = GEO.parksFrom(CFG.parks, DATA.hidden);
+    const a = GEO.readParks(from.list);
     const b = GEO.readParks(rec.temps);
     parks = a.parks.concat(b.parks.map((p) => Object.assign(p, { temp: true })));
-    problems = a.problems.concat(b.problems);
+    problems = from.problems.concat(a.problems, b.problems);
+    if (!SEARCH_ID) problems.push("data.js に、公園で気配を探す場面（search のある場面）がありません。イーブイの文を出せません。");
   }
   const parkById = (id) => parks.find((p) => p.id === id) || null;
   const foundIds = () => rec.found.filter((id) => parkById(id));
@@ -354,19 +362,25 @@
   // ==============================================================
   // 3. 位置を測る（1回の確認・監視モード・仮の点の登録）
   // ==============================================================
-  //   mode：check（1回の確認）/ watch（監視モード）/ register（仮の判定点の登録）
-  const SES = {
-    mode: "", token: 0, watchId: null, timer: null, tick: null,
-    first: 0, lastNew: 0, lastPoke: 0, poking: false, unavailable: false,
-    seen: null, judge: null, readings: 0, hidden: 0, regRun: 0, regBest: null, regTop: null, noted: null,
-  };
-  const geoOk = () => Boolean(navigator.geolocation) && window.isSecureContext !== false;
+  //   mode：check（1回の確認。本編と同じ geo.js の check）/ watch（監視モード）/ register（仮の判定点の登録）
+  //   watch と register は、geo.js の track（位置を測り続ける仕組み）を、このページで使う
+  const SES = { mode: "", run: null, info: null, judge: null, readings: 0, hidden: 0, regRun: 0, regBest: null, regTop: null, noted: null };
+  const geoOk = () => GEO.usable(navigator, window);
+  const hiddenNow = () => document.visibilityState === "hidden";
+  const tagOf = (r) => (r && r.source === "get" ? "［取りにいった］" : "") + (hiddenNow() ? "［画面が隠れている間］" : "");
+  const ageOf = (r) => r.at - r.ts;
+  const ageText = (r) => (Number.isFinite(ageOf(r)) && Math.abs(ageOf(r)) >= 2000 ? `（位置の古さ ${(ageOf(r) / 1000).toFixed(1)}秒）` : "");
+  const errText = (err, source) => `エラー：${ERR[err && err.code] || `不明なエラー（${err && err.code}）`}${source === "get" ? "［取りにいった］" : ""}${err && err.message ? `　${err.message}` : ""}`;
 
-  function options(withTimeout) {
-    const o = { enableHighAccuracy: CFG.highAccuracy !== false, maximumAge: Number(CFG.maximumAge) || 0 };
-    if (withTimeout) o.timeout = Number(CFG.timeout) || 15000;
-    return o;
+  // 新しい位置が届いたとき（古い位置ではない）：画面の「いまの位置」と距離の表を新しくする
+  function freshPosition(r) {
+    SES.readings += 1;
+    if (hiddenNow()) SES.hidden += 1;
+    lastPos = r;
+    renderNow();
+    renderTable();
   }
+  const obsText = (obs) => `${SES.mode === "watch" ? "［監視］" : ""}精度${acc(obs.accuracy)}／${obs.label || "公園"}まで${meters(obs.distance)} → ${KIND[obs.kind]}`;
 
   function begin(mode) {
     stop();
@@ -377,186 +391,129 @@
       return;
     }
     SES.mode = mode;
-    SES.token += 1;
-    SES.first = 0;
-    SES.lastNew = 0;
-    SES.lastPoke = 0;
-    SES.poking = false;
-    SES.unavailable = false;
-    SES.seen = new Set();
+    SES.info = null;
     SES.readings = 0;
     SES.hidden = 0;
-    SES.judge = mode === "register" ? null : GEO.judge(CFG, foundIds(), { watch: mode === "watch" });
     SES.regRun = 0;
     SES.regBest = null;
     SES.regTop = null;
     SES.noted = new Set();
-    const token = SES.token;
-    // 監視モードは時間切れにしない（ポケットの中でも測り続けるかを確かめるため）
-    SES.watchId = navigator.geolocation.watchPosition(
-      (pos) => onPosition(pos, "watch", token),
-      (err) => onError(err, "watch", token),
-      options(mode !== "watch"));
-    if (mode !== "watch") SES.timer = setTimeout(() => { if (token === SES.token) timeUp(); }, FIRST_WAIT);
-    SES.tick = setInterval(() => tick(token), 500);
+    SES.judge = mode === "watch" ? GEO.judge(CFG, foundIds(), { watch: true }) : null;
     log(mode === "check" ? "現在地の確認を始めた" : mode === "watch" ? "監視を始めた" : "仮の判定点の登録のために、測り始めた");
+    if (mode === "check") SES.run = GEO.check({ cfg: CFG, geo: navigator.geolocation, parks, found: foundIds(), onLog: checkLog, onTick: onTick, onDone: checkDone });
+    else SES.run = GEO.track({
+      cfg: CFG, geo: navigator.geolocation, limit: mode === "register",   // 監視モードは時間切れにしない（ポケットの中でも測り続けるかを確かめるため）
+      onDuplicate: (r) => log(`同じ位置がもう一度届いた（数えない）${tagOf(r)}`),
+      onPosition: mode === "watch" ? watchPosition : registerPosition,
+      onError: trackError,
+      onTimeUp: () => registerEnd(SES.regBest, SES.regTop, true),
+      onPoke: () => log("新しい位置が来ないので、取りにいった"),
+      onTick: () => onTick(SES.run && SES.run.info()),
+    });
     updateButtons();
-    tick(token);
+    onTick(null);
   }
 
   function stop() {
     if (!SES.mode) return;
-    if (SES.watchId != null) navigator.geolocation.clearWatch(SES.watchId);
-    clearTimeout(SES.timer);
-    clearInterval(SES.tick);
+    const run = SES.run;
     SES.mode = "";
-    SES.watchId = null;
-    SES.timer = null;
-    SES.tick = null;
-    SES.token += 1;   // あとから届いた位置は使わない
+    SES.run = null;
+    if (run) run.stop();   // 止めたあとに届いた位置は使わない
     updateButtons();
   }
 
-  // 最初の位置（または返事）が届いたら、そこから timeout のあいだ測る
-  //   （許可の確認に答えている時間は、測る時間に入れない）
-  function firstResponse(token) {
-    if (SES.first) return;
-    SES.first = Date.now();
-    SES.lastNew = SES.first;
-    if (SES.mode !== "watch") {
-      clearTimeout(SES.timer);
-      SES.timer = setTimeout(() => { if (token === SES.token) timeUp(); }, Number(CFG.timeout) || 15000);
-    }
-  }
-
-  function tick(token) {
-    if (token !== SES.token || !SES.mode) return;
-    const now = Date.now();
+  // 0.5秒ごとの表示（測っている間の文）
+  function onTick(info) {
+    if (!SES.mode) return;
+    if (info) SES.info = info;
+    const inf = SES.info || {};
     if (SES.mode === "watch") {
       $("watchState").textContent = `監視中：読み取り ${SES.readings}回`
         + (SES.hidden ? `（うち画面が隠れている間 ${SES.hidden}回）` : "")
-        + (SES.lastNew && SES.readings ? `。最後の読み取り ${clock(SES.lastNew)}` : "。位置を待っています");
+        + (lastPos && SES.readings ? `。最後の読み取り ${clock(lastPos.at)}` : "。位置を待っています");
       return;
     }
-    const left = SES.first ? Math.max(0, Math.ceil((SES.first + (Number(CFG.timeout) || 15000) - now) / 1000)) : null;
     const what = SES.mode === "check" ? "測っています" : "登録のために測っています";
     let run = "";
-    if (SES.mode === "check") {
-      const r = SES.judge.run();
-      if (r.kind) run = `／いま：${KIND[r.kind]}${r.kind === "poor" ? "" : ` ${r.n}/${r.need}`}`;
-    } else run = `／精度が十分な読み取り ${SES.regRun}/${CFG.streak}`;
-    $("progress").textContent = SES.first
-      ? `${what}… あと${left}秒（読み取り ${SES.readings}回${run}）`
+    if (SES.mode === "check" && inf.run) {
+      if (inf.run.kind) run = `／いま：${KIND[inf.run.kind]}${inf.run.kind === "poor" ? "" : ` ${inf.run.n}/${inf.run.need}`}`;
+    } else if (SES.mode === "register") run = `／精度が十分な読み取り ${SES.regRun}/${CFG.streak}`;
+    $("progress").textContent = inf.first
+      ? `${what}… あと${inf.left}秒（読み取り ${SES.readings}回${run}）`
       : "位置を待っています…（初めてのときは、位置情報の許可の確認が出ます）";
-    // 新しい位置がしばらく来ないときは、こちらから1回取りにいく（1回の確認と登録だけ）
-    if (SES.first && !SES.poking && now - Math.max(SES.lastNew, SES.lastPoke) > POKE_AFTER) {
-      SES.poking = true;
-      SES.lastPoke = now;
-      log("新しい位置が来ないので、取りにいった");
-      const remain = Math.max(1000, SES.first + (Number(CFG.timeout) || 15000) - now);
-      navigator.geolocation.getCurrentPosition(
-        (pos) => { if (token === SES.token) SES.poking = false; onPosition(pos, "get", token); },
-        (err) => { if (token === SES.token) SES.poking = false; onError(err, "get", token); },
-        Object.assign(options(false), { timeout: remain }));
-    }
   }
 
-  function onPosition(pos, source, token) {
-    if (token !== SES.token || !SES.mode) return;
-    firstResponse(token);
-    const c = pos.coords;
-    const r = { lat: c.latitude, lon: c.longitude, accuracy: c.accuracy, ts: pos.timestamp, at: Date.now() };
-    const hiddenNow = document.visibilityState === "hidden";
-    const tag = (source === "get" ? "［取りにいった］" : "") + (hiddenNow ? "［画面が隠れている間］" : "");
-    // 同じ位置が2回届いても、2回とは数えない（「2回続けて」を、別々の読み取りで数えるため）
-    const key = [r.ts, r.lat, r.lon, r.accuracy].join("|");
-    if (SES.seen.has(key)) {
-      log(`同じ位置がもう一度届いた（数えない）${tag}`);
-      return;
-    }
-    SES.seen.add(key);
-    const age = r.at - r.ts;
-    // 古い位置・前の読み取りに近すぎる位置は、判定に使わない（1回の確認と監視モードは、geo.js の judge が分ける）
-    const obs = SES.judge ? Object.assign(GEO.classify(parks, r.lat, r.lon, r.accuracy, CFG), { ts: r.ts }) : null;
-    const d = obs ? SES.judge.feed(obs, r.at) : GEO.isStale(r.ts, r.at, CFG) ? { skip: "stale" } : null;
+  // ---- 1回の確認（geo.js の check。本編の「気配を探す」と同じ） ----
+  function checkLog(kind, x) {
+    if (SES.mode !== "check") return;
+    if (kind === "dup") log(`同じ位置がもう一度届いた（数えない）${tagOf(x.r)}`);
+    else if (kind === "stale") log(`古い位置が届いた（${(x.age / 1000).toFixed(1)}秒前。数えない）${tagOf(x.r)}`);
+    else if (kind === "fresh") freshPosition(x.r);
+    else if (kind === "close") log(`${obsText(x.obs)}（前の読み取りから${(x.since / 1000).toFixed(1)}秒。${seconds(CFG.minGap)}秒たっていないので数えない）${tagOf(x.r)}${ageText(x.r)}`);
+    else if (kind === "reading") log(`${obsText(x.obs)}${x.obs.kind === "poor" ? "" : `（${x.run.n}/${x.run.need}）`}${tagOf(x.r)}${ageText(x.r)}`);
+    else if (kind === "error") log(errText(x.err, x.source));
+    else if (kind === "poke") log("新しい位置が来ないので、取りにいった");
+    else if (kind === "timeup") log(`時間切れ（${(Number(CFG.timeout) || 15000) / 1000}秒）`);
+  }
+  function checkDone(d) {
+    if (SES.mode !== "check") return;
+    stop();
+    conclude(d);
+  }
+
+  // ---- 監視モード：まだ数えていない公園で見つけたら、ヒントを一度だけ出して止める ----
+  function watchPosition(r) {
+    if (SES.mode !== "watch") return;
+    const obs = Object.assign(GEO.classify(parks, r.lat, r.lon, r.accuracy, CFG), { ts: r.ts });
+    const d = SES.judge.feed(obs, r.at);
     // 古い位置は数えない（maximumAge: 0 でも、iPhone は数十秒前の位置を届けることがある）
     if (d && d.skip === "stale") {
-      log(`古い位置が届いた（${(age / 1000).toFixed(1)}秒前。数えない）${tag}`);
+      log(`古い位置が届いた（${(d.age / 1000).toFixed(1)}秒前。数えない）${tagOf(r)}`);
       return;
     }
-    SES.lastNew = r.at;
-    SES.readings += 1;
-    if (hiddenNow) SES.hidden += 1;
-    lastPos = r;
-    renderNow();
-    renderTable();
-    const ageText = Number.isFinite(age) && Math.abs(age) >= 2000 ? `（位置の古さ ${(age / 1000).toFixed(1)}秒）` : "";
-    if (SES.mode === "register") {
-      registerFeed(r, tag + ageText);
-      return;
-    }
-    const where = `${SES.mode === "watch" ? "［監視］" : ""}精度${acc(obs.accuracy)}／${obs.label || "公園"}まで${meters(obs.distance)} → ${KIND[obs.kind]}`;
+    SES.run.fresh();
+    freshPosition(r);
     if (d && d.skip === "close") {
-      log(`${where}（前の読み取りから${(d.since / 1000).toFixed(1)}秒。${seconds(CFG.minGap)}秒たっていないので数えない）${tag}${ageText}`);
+      log(`${obsText(obs)}（前の読み取りから${(d.since / 1000).toFixed(1)}秒。${seconds(CFG.minGap)}秒たっていないので数えない）${tagOf(r)}${ageText(r)}`);
       return;
     }
     const run = SES.judge.run();
-    log(`${where}${obs.kind === "poor" ? "" : `（${run.n}/${run.need}）`}${tag}${ageText}`);
+    log(`${obsText(obs)}${obs.kind === "poor" ? "" : `（${run.n}/${run.need}）`}${tagOf(r)}${ageText(r)}`);
     if (!d) return;
-    if (SES.mode === "watch") {
-      // 監視モード：まだ数えていない公園で見つけたら、ヒントを一度だけ出して止める
-      if (d.result === "found") {
-        stop();
-        $("watchState").textContent = `${clock(Date.now())} に見つけたので、監視を止めました（上の結果を見てください）。`;
-        conclude(d, "監視モードで見つけた");
-      } else if (d.result === "already" && !SES.noted.has(d.park)) {
-        SES.noted.add(d.park);
-        log(`${d.label}は、もう数えた公園（監視は続けます）`);
-      }
-      return;
-    }
-    stop();
-    conclude(d);
-  }
-
-  function onError(err, source, token) {
-    if (token !== SES.token || !SES.mode) return;
-    const code = err && err.code;
-    log(`エラー：${ERR[code] || `不明なエラー（${code}）`}${source === "get" ? "［取りにいった］" : ""}${err && err.message ? `　${err.message}` : ""}`);
-    if (code === 1) {
-      const mode = SES.mode;
+    if (d.result === "found") {
       stop();
-      if (mode === "register") $("tempMsg").textContent = "位置情報の利用が許可されていないため、登録できませんでした（いちばん下の案内を見てください）。";
-      else {
-        if (mode === "watch") $("watchState").textContent = "位置情報の利用が許可されていないため、監視を止めました。";
-        conclude({ result: "error", code: 1 });
-      }
-      return;
+      $("watchState").textContent = `${clock(Date.now())} に見つけたので、監視を止めました（上の結果を見てください）。`;
+      conclude(d, "監視モードで見つけた");
+    } else if (d.result === "already" && !SES.noted.has(d.park)) {
+      SES.noted.add(d.park);
+      log(`${d.label}は、もう数えた公園（監視は続けます）`);
     }
-    firstResponse(token);
-    if (code === 2) SES.unavailable = true;
-    // 位置が1つも来ないまま、測る仕組みが時間切れを知らせてきたら、そこで終わる（監視モードは続ける）
-    if (code === 3 && source === "watch" && !SES.readings && SES.mode !== "watch") timeUp();
   }
 
-  // 測る時間が終わったとき（1回の確認と登録）
-  function timeUp() {
-    if (!SES.mode || SES.mode === "watch") return;
+  // ---- 監視モードと登録のエラー（拒否のときは、geo.js の track が測るのを止めている） ----
+  function trackError(err, source, fatal) {
     const mode = SES.mode;
-    const answered = Boolean(SES.first);
-    const unavailable = SES.unavailable;
-    const judge = SES.judge;
-    const best = SES.regBest;
-    const top = SES.regTop;
+    log(errText(err, source));
+    if (!fatal) return;
     stop();
-    if (mode === "register") {
-      registerEnd(best, top, true);
+    if (mode === "register") $("tempMsg").textContent = "位置情報の利用が許可されていないため、登録できませんでした（いちばん下の案内を見てください）。";
+    else if (mode === "watch") {
+      $("watchState").textContent = "位置情報の利用が許可されていないため、監視を止めました。";
+      conclude({ result: "error", code: 1 });
+    }
+  }
+
+  // ---- 仮の判定点の登録：古い位置は数えない ----
+  function registerPosition(r) {
+    if (SES.mode !== "register") return;
+    if (GEO.isStale(r.ts, r.at, CFG)) {
+      log(`古い位置が届いた（${(ageOf(r) / 1000).toFixed(1)}秒前。数えない）${tagOf(r)}`);
       return;
     }
-    let d = judge.finish();
-    if (d.result === "noReading") d = { result: "error", code: unavailable ? 2 : 3, noAnswer: !answered };
-    log(`時間切れ（${(Number(CFG.timeout) || 15000) / 1000}秒）`);
-    conclude(d);
+    SES.run.fresh();
+    freshPosition(r);
+    registerFeed(r, tagOf(r) + ageText(r));
   }
 
   // ---- 仮の判定点の登録：精度が上限以内の読み取りが2回続いたら、良いほうの位置で登録する ----
@@ -573,6 +530,7 @@
     }
   }
   function registerEnd(best, top, timedOut) {
+    stop();
     if (!best) {
       $("tempMsg").textContent = top
         ? `位置の精度が足りないため、登録しませんでした（いちばん良かったときで ${acc(top.accuracy)}。上限 ${CFG.accuracy} m）。空の見える所で、もう一度押してください。`
@@ -614,25 +572,20 @@
   // ==============================================================
   function conclude(d, how) {
     let kind = d.result;
-    let line = "";
     let detail = "";
     let guide = "";
     if (d.result === "found") {
       if (!rec.found.includes(d.park)) rec.found.push(d.park);
       const n = count();
       kind = n >= CFG.need ? "reached" : "found";
-      line = GEO.hintFor(n, CFG);
       detail = `${d.label}で気配を見つけた（${n}公園目）。いちばん近い点まで ${meters(d.distance)}、精度 ${acc(d.accuracy)}。`
         + `範囲内が${CFG.streak}回続いた。`;
       if (kind === "reached") detail += `必要な数（${CFG.need}）に達した。本編では、ここで3-2（リーフィア）へ進む。`;
     } else if (d.result === "already") {
-      line = TEXT.already;
       detail = `${d.label}は、もう数えた公園。数は増えない（いちばん近い点まで ${meters(d.distance)}、精度 ${acc(d.accuracy)}）。`;
     } else if (d.result === "none") {
-      line = TEXT.none;
       detail = `いちばん近い判定点（${d.label}）まで ${meters(d.distance)}（半径 ${CFG.radius} m）、精度 ${acc(d.accuracy)}。`;
     } else if (d.result === "unclear") {
-      line = TEXT.unclear;
       if (d.staleOnly) detail = `新しい位置（${seconds(CFG.staleAfter)}秒以内に測ったもの）が届かなかった（古い位置だけが${d.stale}回届いた）。`;
       else {
         detail = (d.sawIn ? `範囲内の読み取りはあったが、${CFG.streak}回続かなかった。` : "")
@@ -644,6 +597,10 @@
       detail = `${ERR[d.code] || "エラー"}。${d.noAnswer ? "位置も返事も届かなかった。" : ""}`;
       guide = GUIDE_OF_CODE[d.code] || "";
     }
+    // イーブイの文は、本編と同じ（geo.js の lineFor。文は data.js の leafeon_search の search）
+    const msg = GEO.lineFor(d, count(), CFG, TEXT);
+    const line = msg.text;
+    if (msg.note) detail += `（本編で台詞の下に出す案内：${msg.note}）`;
     // 続けて見つからなかった回数を進める（見つけたら0。もう数えた公園では変えない）
     const step = GEO.missStep(rec.misses, kind, CFG);
     rec.misses = step.misses;
@@ -761,11 +718,13 @@
       ["続けて数える読み取りの間隔", `${seconds(CFG.minGap)}秒以上（近すぎる読み取りは数えない）`],
       ["必要な公園の数", `${CFG.need}`],
       ["1回の確認で測る時間", `${(Number(CFG.timeout) || 15000) / 1000}秒（最初の位置か返事が届いてから）`],
+      ["最初の位置を待つ上限", `${seconds(CFG.firstWait)}秒（何も届かなければ時間切れ）`],
+      ["こちらから取りにいく", `新しい位置が${seconds(CFG.pokeAfter)}秒来ないとき`],
       ["精度がとても低い目安", `${CFG.poorAccuracy} m 以上`],
       ["取得の設定", `enableHighAccuracy: ${CFG.highAccuracy !== false}／maximumAge: ${Number(CFG.maximumAge) || 0}`],
       ["数えない古い位置", `${seconds(CFG.staleAfter)}秒より前に測った位置`],
       ["「見つけたことにする」を出す", `続けて${CFG.manualAfter}回見つからなかったあと（エラーは1回目から）`],
-      ["公園（geo.js）", `${cfgParks.length}か所・判定点 ${points}点${allDraft ? "（座標は【仮】）" : ""}`],
+      ["公園（data.js）", `${cfgParks.length}か所・判定点 ${points}点${allDraft ? "（座標は【仮】）" : ""}`],
       ["仮の公園", `${rec.temps.length}か所`],
       ["この端末の保存名", `${STORE_KEY}（本編の記録とは別）`],
     ];
@@ -853,7 +812,7 @@
     save();
     const n = count();
     const kind = n >= CFG.need ? "reached" : "found";
-    showResult(kind, GEO.hintFor(n, CFG),
+    showResult(kind, GEO.hintFor(n, CFG, TEXT.found),
       `「気配を見つけたことにする」で、数を1つ増やした（${n}公園目）。`
       + (kind === "reached" ? `必要な数（${CFG.need}）に達した。本編では、ここで3-2（リーフィア）へ進む。` : ""), "");
     $("manualBtn").hidden = true;
@@ -977,6 +936,8 @@
   rebuildParks();
   renderHelp();
   renderAll();
+  // 続けて見つからなかった回数が、もう manualAfter 回に達していれば、開いたときから出す（本編と同じ）
+  $("manualBtn").hidden = rec.misses < CFG.manualAfter;
   log("ページを開いた");
 })();
 </script>
