@@ -21,6 +21,8 @@ const GEO_SETTINGS = {
   poorAccuracy: 300,   // 精度がこれより粗いときは、「正確な位置情報」がオフかもしれないと案内する（m）
   highAccuracy: true,  // enableHighAccuracy（GPS を使って、細かく測る）
   maximumAge: 0,       // 前に測った位置を使い回さない（ミリ秒）
+  staleAfter: 10000,   // これより前に測った位置（ミリ秒）は、届いても数えない
+                       // （maximumAge: 0 でも、iPhone は数十秒前の位置を届けることがある。10/31 の実機で確認）
 
   // ---- 公園と、判定する点 ----
   //  points：判定する点（1〜3点）。どの点で見つけても、同じ1公園として数える
@@ -206,5 +208,12 @@ const GEO_SETTINGS = {
     return list.length ? list[Math.min(Math.max(n, 1), list.length) - 1] : "";
   }
 
-  window.GEO = { settings: GEO_SETTINGS, hide, unhide, distance, parsePoint, readParks, nearest, kindOf, classify, judge, hintFor };
+  // 測った時刻 ts が、いま（now）より staleAfter より前なら、古い位置（数えない）
+  //   時計のずれで ts が先になったときは、新しい位置として扱う
+  function isStale(ts, now, cfg) {
+    const limit = Number(cfg.staleAfter) || 0;
+    return limit > 0 && Number.isFinite(ts) && now - ts > limit;
+  }
+
+  window.GEO = { settings: GEO_SETTINGS, hide, unhide, distance, parsePoint, readParks, nearest, kindOf, classify, judge, hintFor, isStale };
 })();
