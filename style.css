@@ -1629,6 +1629,14 @@ button { font: inherit; color: inherit; touch-action: manipulation; }
   animation: rise .25s ease-out both;
 }
 
+/* 公園で気配を探す（data.js の search。3-1と3-2のあいだ） */
+.search-buttons { display: flex; flex-direction: column; gap: 8px; }
+.search-buttons .quick-btn { align-self: center; }
+.search-wait { padding: 12px 0; font-size: 15px; animation: search-wait 1.4s ease-in-out infinite; }
+@keyframes search-wait { 0%, 100% { opacity: 1; } 50% { opacity: .45; } }
+/* 台詞の下に出す小さな案内（設定の場所など）。角丸の囲みにして、長い文も読みやすく */
+.msg.system.search-note .bubble { border-radius: 12px; text-align: left; line-height: 1.5; font-size: 12.5px; }
+
 /* 暗い窓（data.js の knock。2-7 のiPhone側）：ブラッキーが窓を閉じて待っている。画面は暗い窓だけ */
 .chat.knocking { background: #0b0d1f; }
 .chat.knocking .chat-log,

@@ -340,10 +340,33 @@
 
   // name：主人公の名前 / flags：set で記録した条件 / atEnd：章の終わりの画面にいる
   // walk：歩けるマップで最後にいた場所（{ scene, map, x, y, dir }）
-  const freshState = () => ({ scene: null, met: [], words: [], flags: [], name: "", chapter: "", bg: "", atEnd: false, walk: null });
+  // parks・parkManual・parkMisses：公園で気配を探す（GPSヒント機能）の記録
+  //   見つけた公園の id・「気配を見つけたことにする」で増やした数・続けて見つからなかった回数（現在地は記録しない）
+  const freshState = () => ({
+    scene: null, met: [], words: [], flags: [], name: "", chapter: "", bg: "", atEnd: false, walk: null,
+    parks: [], parkManual: 0, parkMisses: 0,
+  });
   let state = freshState();
   let gen = 0;            // 場面が変わるたびに増える番号（古いタイマーを無効にする）
   let currentView = "";
+
+  // 公園で気配を探す（GPSヒント機能）。判定の計算は geo.js（window.GEO）、設定値と公園は data.js の SETTINGS.gps
+  //   geo.js を読み込めなかったときや、位置情報を使えない端末（PCなど）でも、「気配を見つけたことにする」で進める
+  const GEO = window.GEO || null;
+  const PARK = S.gps || {};
+  let parkCache = null;
+  function parkList() {
+    if (!parkCache) parkCache = GEO ? GEO.readParks(GEO.parksFrom(PARK.parks, S.hidden).list).parks : [];
+    return parkCache;
+  }
+  const parkNeed = () => Math.max(1, Math.floor(Number(PARK.need) || 1));
+  // 見つけた数：公園で見つけた数（今の公園の一覧にあるものだけ）＋「気配を見つけたことにする」で増やした数
+  const parkCount = () => state.parks.filter((id) => parkList().some((p) => p.id === id)).length + state.parkManual;
+  function clearParks() {
+    state.parks = [];
+    state.parkManual = 0;
+    state.parkMisses = 0;
+  }
 
   // ==============================================================
   // 4. 画面の部品
@@ -2838,6 +2861,88 @@
       chat.knock.onclick = go;
       if (!TOUCH) chat.knock.focus({ preventScroll: true });
     },
+
+    // 公園で気配を探す（data.js の search。3-1 と 3-2 のあいだ）
+    //   「気配を探す」→ 位置を測る（geo.js の check）→ イーブイの文（と小さな案内）→ またボタン
+    //   必要な数に達したら、そのヒントのあとに「つづける ▶」を出し、done（次の場面へ）
+    //   見つけた数や必要な数は、画面に出さない。測っている間に場面が変わったら、結果を捨てる
+    search(sc, done) {
+      const token = gen;
+      const texts = sc.search || {};
+      const need = parkNeed();
+      const manualAfter = Math.max(1, Math.floor(Number(PARK.manualAfter) || 1));
+      const hint = (n) => (GEO ? GEO.hintFor(n, PARK, texts.found) : "");
+      // イーブイの文を出し（前の文のあとでも、タップを待たずに出す）、案内があれば、その下に小さく出す
+      const speak = (msg, then) => {
+        CV.wait = false;
+        this.say(msg.text ? [msg.text] : [], () => {
+          if (token !== gen) return;
+          if (msg.note) {
+            const node = el("div", { class: "msg system search-note" }, el("div", { class: "bubble", text: fill(msg.note) }));
+            chat.log.append(node);
+            scrollChat();
+          }
+          then();
+        });
+      };
+      const reached = () => this.proceed(done);
+      const buttons = (manual) => {
+        chat.foot.replaceChildren(el("div", { class: "search-buttons" },
+          el("button", { type: "button", class: "next-btn", text: T("searchButton"), onclick: start }),
+          manual ? el("button", { type: "button", class: "quick-btn", text: T("searchManual"), onclick: addManual }) : null));
+        scrollChat();
+      };
+      // 結果のあと：数と、続けて見つからなかった回数を記録して、文を出す
+      const result = (d) => {
+        if (token !== gen) return;
+        if (d.result === "found" && !state.parks.includes(d.park)) state.parks.push(d.park);
+        const n = parkCount();
+        const kind = d.result === "found" && n >= need ? "reached" : d.result;
+        const step = GEO ? GEO.missStep(state.parkMisses, kind, PARK) : { misses: state.parkMisses, manual: true };
+        state.parkMisses = step.misses;
+        storage.save(state);
+        const msg = GEO ? GEO.lineFor(d, n, PARK, texts) : { text: texts.unsupported && texts.unsupported.text, note: texts.unsupported && texts.unsupported.note };
+        speak(msg, kind === "reached" ? reached : () => buttons(step.manual));
+      };
+      function start() {
+        chat.foot.replaceChildren(el("div", { class: "foot-prompt search-wait", text: T("searchWait") }));
+        CV.wait = false;
+        const typing = CHARS.eevee ? addTyping("eevee") : null;
+        const finish = (d) => {
+          if (typing) typing.remove();
+          result(d);
+        };
+        if (!GEO || !GEO.usable(navigator, window)) {
+          setTimeout(() => { if (token === gen) finish({ result: "error", code: 0 }); }, 600);
+          return;
+        }
+        let run = null;
+        run = GEO.check({
+          cfg: PARK, geo: navigator.geolocation, parks: parkList(), found: state.parks,
+          onTick: () => {
+            if (token === gen || !run) return;
+            run.stop();
+            if (typing) typing.remove();
+          },
+          onDone: (d) => { if (token === gen) finish(d); },
+        });
+      }
+      // 「気配を見つけたことにする」：数を1つ増やす（公園名も番号も出さない）
+      function addManual() {
+        state.parkManual += 1;
+        if (GEO) state.parkMisses = GEO.missStep(state.parkMisses, "manual", PARK).misses;
+        else state.parkMisses = 0;
+        storage.save(state);
+        const n = parkCount();
+        speak({ text: hint(n) }, n >= need ? reached : () => buttons(false));
+      }
+      // はじめ（「つづきから」を含む）：見つけていれば、最後に出たヒントの文をもう一度出す
+      const n = parkCount();
+      const manual = state.parkMisses >= manualAfter;
+      if (n >= need) speak({ text: hint(n) }, reached);
+      else if (n > 0) speak({ text: hint(n) }, () => buttons(manual));
+      else buttons(manual);
+    },
   };
 
   // ==============================================================
@@ -2874,6 +2979,7 @@
     state.bg = sc.bg || (jump ? inherited(id, "bg") : state.bg);
     applyMeet(sc);
     setFlags(sc);
+    if (sc.parkReset === true) clearParks();   // 3-0：公園で見つけた記録を空にする（合言葉で始め直したとき用）
     storage.save(state);
     if (DEBUG) debugNow(id);
     // 音の鳴らし方：第3部（mute）は鳴らさない。iPhone の場面（chat）は短い通知音だけ。PCの場面は全部
@@ -2948,6 +3054,8 @@
     if (sc.end) return view === ChatView ? view.proceed(() => showEnd(sc)) : showEnd(sc);
     // knock：暗い窓の画面で、タップを待ってから次の場面へ（メッセージ画面だけ。2-7 のiPhone側）
     if (sc.knock && sc.next && view === ChatView) return view.knock(sc, () => runScene(sc.next));
+    // search：公園で気配を探す。必要な数に達したら、「つづける ▶」で次の場面へ（メッセージ画面だけ）
+    if (sc.search && sc.next && view === ChatView) return view.search(sc, () => runScene(sc.next));
     if (sc.next) return view.proceed(() => runScene(sc.next));
     return undefined;
   }
@@ -3195,6 +3303,10 @@
     if (!Array.isArray(state.words)) state.words = [];
     if (!Array.isArray(state.flags)) state.flags = [];
     if (typeof state.name !== "string") state.name = "";
+    // 公園の記録がない古い記録は、初期値で補う
+    state.parks = Array.isArray(state.parks) ? state.parks.filter((x) => typeof x === "string") : [];
+    state.parkManual = Math.max(0, Math.floor(Number(state.parkManual) || 0));
+    state.parkMisses = Math.max(0, Math.floor(Number(state.parkMisses) || 0));
     updateParty();
   }
 
@@ -3296,7 +3408,7 @@
     "keywordTitle", "keywordNote", "keywordPlaceholder", "keywordSubmit", "keywordOk", "keywordWrong",
     "keywordEmpty", "keywordReceived", "keywordResume", "keywordStart", "back",
     "inputPrompt", "inputPlaceholder", "namePlaceholder", "submit", "send", "hint", "chatHint", "chatHintSay", "inputBack",
-    "skip", "wrong", "next", "draft", "chatTitle",
+    "skip", "wrong", "next", "draft", "chatTitle", "searchButton", "searchWait", "searchManual",
     "wordGet", "wordFrom", "wordGetChat", "wordNote", "ok", "metToast",
     "partyTitle", "partyNote", "partyNoteMet", "partyNoteAll", "close",
     "menuTitle", "menuParty", "menuMap", "menuHouseMap", "menuToTitle", "menuNote",
@@ -3495,6 +3607,9 @@
         if (sc.choices || sc.input || sc.end) errors.push(`${at}：knock（暗い窓）の場面では、choices・input・end は使えません（タップすると next へ進みます）。`);
       }
       check(sc.resume, `${at} の resume`);
+      // 公園で気配を探す（search。GPSヒント機能）と、公園の記録を空にする（parkReset）
+      if (sc.search != null) checkSearch(sc, at, errors, warnings, checkText);
+      if (sc.parkReset !== undefined && typeof sc.parkReset !== "boolean") errors.push(`${at} の parkReset は、true か false にしてください。`);
       if (sc.walk) checkWalk(id, sc, at, errors, warnings, check, checkLines, checkText);
       if (sc.house) {
         checkHouseFx(sc.house, `${at} の house`);
@@ -3613,7 +3728,73 @@
       }
     }
     checkHouse(errors, warnings);
+    if (Object.values(SCN).some((sc) => sc && sc.search != null)) checkGps(errors, warnings);
     return { errors, warnings };
+  }
+
+  // 公園で気配を探す場面（search）の点検
+  const SEARCH_TEXTS = ["none", "unclear", "already", "denied", "failed", "poor", "unsupported"];
+  const SEARCH_FOUND = ["first", "more", "reached"];
+  function checkSearch(sc, at, errors, warnings, checkText) {
+    const t = sc.search;
+    if (!t || typeof t !== "object") {
+      errors.push(`${at} の search は、{ found: { … }, none: "…", … } の形で書いてください（leafeon_search を参照）。`);
+      return;
+    }
+    if (sc.mode !== "chat") warnings.push(`${at}：search（公園で気配を探す）は、メッセージ形式（chat）の場面でだけ使えます。`);
+    if (!sc.next) errors.push(`${at} の search には、next（必要な数の公園で見つけたあとの行き先）が必要です。`);
+    if (sc.choices || sc.input || sc.end || sc.knock) errors.push(`${at}：search の場面では、choices・input・end・knock は使えません（見つけ終わると next へ進みます）。`);
+    const found = t.found && typeof t.found === "object" ? t.found : {};
+    for (const key of SEARCH_FOUND) {
+      if (!found[key]) errors.push(`${at} の search の found に、${key} の文がありません。`);
+      else checkText(found[key], `${at} の search の found の ${key}`);
+    }
+    for (const key of SEARCH_TEXTS) {
+      const v = t[key];
+      const text = v && typeof v === "object" ? v.text : v;
+      if (!text) errors.push(`${at} の search に、${key} の文がありません。`);
+      else checkText(text, `${at} の search の ${key}`);
+      if (v && typeof v === "object" && v.note != null) checkText(v.note, `${at} の search の ${key} の note`);
+    }
+    for (const key of Object.keys(t)) if (key !== "found" && !SEARCH_TEXTS.includes(key)) warnings.push(`${at} の search の「${key}」は使われません（found・${SEARCH_TEXTS.join("・")}）。`);
+  }
+
+  // 公園で気配を探す設定（SETTINGS の gps）の点検。公園の座標は SETTINGS の hidden
+  function checkGps(errors, warnings) {
+    if (!GEO) {
+      errors.push("公園で気配を探す場面がありますが、geo.js を読み込めませんでした（index.html に geo.js の行があるか確かめてください）。");
+      return;
+    }
+    if (!S.gps || typeof S.gps !== "object") {
+      errors.push("SETTINGS に gps（公園で気配を探す設定）がありません。");
+      return;
+    }
+    const g = S.gps;
+    const num = (key, min, int) => {
+      const v = g[key];
+      if (typeof v !== "number" || !(v >= min) || (int && !Number.isInteger(v))) {
+        errors.push(`SETTINGS の gps の ${key} は、${min} 以上の${int ? "整数" : "数"}にしてください。`);
+      }
+    };
+    num("radius", 1); num("accuracy", 1); num("poorAccuracy", 1);
+    num("streak", 1, true); num("need", 1, true); num("manualAfter", 1, true);
+    num("timeout", 1000); num("firstWait", 1000); num("pokeAfter", 500);
+    num("minGap", 0); num("staleAfter", 0); num("maximumAge", 0);
+    if (typeof g.highAccuracy !== "boolean") errors.push("SETTINGS の gps の highAccuracy は、true か false にしてください。");
+    const from = GEO.parksFrom(g.parks, S.hidden);
+    const read = GEO.readParks(from.list);
+    for (const t of from.problems.concat(read.problems)) errors.push(`SETTINGS の gps の parks：${t}`);
+    if (!read.parks.length) errors.push("SETTINGS の gps の parks に、公園がありません。");
+    else if (read.parks.length < g.need) errors.push(`SETTINGS の gps：必要な公園の数（need：${g.need}）が、公園の数（${read.parks.length}）より多いです。`);
+    // 判定の範囲が重なる公園（いちばん近い公園だけを数えるので、重なると、どちらか一方しか見つからないことがある）
+    const pts = read.parks.flatMap((p) => p.points.map((pt) => ({ id: p.id, label: p.label, pt })));
+    for (let a = 0; a < pts.length; a++) {
+      for (let b = a + 1; b < pts.length; b++) {
+        if (pts[a].id === pts[b].id) continue;
+        const d = GEO.distance(pts[a].pt.lat, pts[a].pt.lon, pts[b].pt.lat, pts[b].pt.lon);
+        if (d < 2 * g.radius) warnings.push(`SETTINGS の gps の parks：${pts[a].label}と${pts[b].label}の点が ${Math.round(d)} m しか離れておらず、判定の範囲（半径 ${g.radius} m）が重なります。`);
+      }
+    }
   }
 
   // house.js の地図の点検（家具や出入口が、部屋からはみ出していないか・会った仲間の印の場所）
@@ -4064,7 +4245,9 @@
         el("button", { type: "button", text: "この場面へ", onclick: () => { panel.hidden = true; runScene(select.value, true); } })),
       el("div", { class: "debug-row" },
         el("button", { type: "button", text: "なかまと言葉を全部にする", onclick: () => { state.met = PARTY.slice(); state.words = PARTY.slice(); storage.save(state); updateParty(); toast("なかまと言葉を全部そろえました"); } }),
-        el("button", { type: "button", text: "記録（セーブ）を消す", onclick: () => { storage.clear(); state = freshState(); updateParty(); toast("記録を消しました"); } })),
+        el("button", { type: "button", text: "記録（セーブ）を消す", onclick: () => { storage.clear(); state = freshState(); updateParty(); toast("記録を消しました"); } }),
+        // 公園で気配を探す（GPSヒント機能）の記録だけを消す（見つけた公園・手動で増やした数・続けて見つからなかった回数）
+        el("button", { type: "button", text: "気配の記録を消す", onclick: () => { clearParks(); storage.save(state); toast("気配の記録を消しました"); } })),
       el("h4", { text: "遊ぶ前の準備：友達の呼び名（ちがう呼び名にするときだけ。このPCだけに記録）" }),
       localTool(),
       el("h4", { text: "遊ぶ前の準備：プレゼントの場所（4-5。このPCだけに記録）" }),

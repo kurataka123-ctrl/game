@@ -1,64 +1,16 @@
 /* ================================================================
-   geo.js ― 公園で「気配」を探す仕組み（GPSヒント機能）
+   geo.js ― 公園で「気配」を探す仕組み（GPSヒント機能）の、判定の計算
    ----------------------------------------------------------------
-   ・今は、テストページ（gps-test.html）だけが読みこみます。
-     本編（index.html）への組み込みは、あとで行います（第4段階）。
-   ・設定値・公園の判定点・表示の文は、下の GEO_SETTINGS の1か所にまとめています。
-   ・公園の座標は、平文では書きません。駅名・公園名と同じ「表示用に隠す」形
-     （"~" で始まる文字）で書きます。engine.js と同じ方式なので、同じ文字を読めます。
-     作り方：本編を ?debug 付きで開き、🛠 →「表示用に隠す」に「緯度,経度」の形
-     （例：12.345678,123.456789）で入れて、出てきた "~…" を points に貼りつける。
+   ・本編（index.html）と、テストページ（gps-test.html）の両方が読みこみます。
+     どちらも data.js のあとに読みこみ、window.GEO で使います。
+   ・このファイルには、設定値・公園の座標・表示の文を書きません。全部 data.js にあります。
+       設定値            → SETTINGS の gps（半径・精度の上限・2回続けて など）
+       公園と判定する点  → SETTINGS の gps の parks（どの点がどの公園か）
+       座標              → SETTINGS の hidden（駅名と同じ「表示用に隠す」形）
+       イーブイの文      → 公園で気配を探す場面（leafeon_search）の search
+       ボタンの文字      → UI の searchButton など
    ・現在地は、保存も、外部への送信もしません。距離の計算は、この端末の中だけで行います。
    ================================================================ */
-
-// ---------------- 設定値（あとで変えられる） ----------------
-const GEO_SETTINGS = {
-  radius: 50,          // 判定する点からの半径（m）。この内側を「範囲内」とする
-  accuracy: 30,        // 位置の精度（accuracy）の上限（m）。これより粗い位置では、見つけたことにしない
-  streak: 2,           // 範囲内（または範囲外）が何回続いたら、結果を決めるか
-  minGap: 2000,        // 続けて数える読み取りの間隔（ミリ秒）。前の読み取りから、これ以上あとに測った位置だけ数える
-                       // （近すぎる位置は、判定に使わない。iPhone は2つの位置を同時に届けることがある。10/31 の実機で確認）
-  need: 3,             // 気配を見つける必要がある公園の数。この数に達したら、3-2（リーフィア）へ進む
-  timeout: 15000,      // 1回の確認で、位置を測り続ける時間（ミリ秒）。最初の位置（または返事）が届いてから数える
-  poorAccuracy: 300,   // 精度がこれより粗いときは、「正確な位置情報」がオフかもしれないと案内する（m）
-  highAccuracy: true,  // enableHighAccuracy（GPS を使って、細かく測る）
-  maximumAge: 0,       // 前に測った位置を使い回さない（ミリ秒）
-  staleAfter: 10000,   // これより前に測った位置（ミリ秒）は、届いても数えない
-                       // （maximumAge: 0 でも、iPhone は数十秒前の位置を届けることがある。10/31 の実機で確認）
-  manualAfter: 3,      // 「気配を見つけたことにする」を出すまでに、続けて見つからなかった回数（気配なし・位置がはっきりしない）
-                       // （エラーのときは、1回目から出す）
-
-  // ---- 公園と、判定する点 ----
-  //  points：判定する点（1〜3点）。どの点で見つけても、同じ1公園として数える
-  //          （大きい公園は、入口ごとに点を書く）
-  //  label ：テストページの表に出す名前（本編には出さない）。本当の公園名は書かない
-  //  draft ：true は【仮】の点（座標をいただくまでの置き場所）。今は全部、本当の座標（10/31 にいただいた）
-  parks: [
-    { id: "parkA", label: "公園A", points: ["~VlBYUFwcVkBXTVxRVVhUVhxXRVQ="] },
-    { id: "parkB", label: "公園B", points: ["~VlBYUFwcV0VTTVxRVVhUVh1UQFM="] },
-    { id: "parkC", label: "公園C", points: ["~VlBYUFwfU0tQTVxRVVhUVh1cQlw="] },
-    { id: "parkD", label: "公園D", points: ["~VlBYUFwdUUVcTVxRVVhUVhhWRF0="] },
-    { id: "parkE", label: "公園E", points: ["~VlBYUF0VU0ZUTVxRVVhUVhlVSlQ="] },
-    { id: "parkF", label: "公園F", points: ["~VlBYUF0aUUFRTVxRVVhUVhtWQV0="] },
-    { id: "parkG", label: "公園G", points: ["~VlBYUFwcVkJXTVxRVVhUVhVTQFQ="] },
-    { id: "parkH", label: "公園H", points: ["~VlBYUFweUkNcTVxRVVhUVhVXRVc="] },
-    { id: "parkI", label: "公園I（入口3つ）", points: ["~VlBYUFwbV0dWTVxRVVhUVhtTQVY=", "~VlBYUFwZU0BRTVxRVVhUVhVQR1w=", "~VlBYUFwYVEVVTVxRVVhUVhtcSlM="] },
-  ],
-
-  // ---- 表示の文【仮】（設計書の側で決める） ----
-  text: {
-    // n公園目に見つけたとき（文が足りない分は、最後の文をくり返す）
-    found: [
-      "イーブイ：近くに草の気配がする！　リーフィア、このあたりを通ったんだ。",
-      "イーブイ：また草の気配！　さっきより強くなってる。",
-    ],
-    reached: "イーブイ：すごく強い気配……すぐそこにいる！",           // 必要な数に達したとき
-    none: "イーブイ：このあたりには、気配がないみたい。",               // 気配なし
-    unclear: "イーブイ：気配がうまくつかめない。空の見える所で、もう一度ためしてみて。", // 位置がはっきりしない
-    already: "イーブイ：ここの気配は、もう見つけた。ほかの公園を探してみよう。",       // もう数えた公園
-  },
-};
-
 
 (() => {
   "use strict";
@@ -109,7 +61,24 @@ const GEO_SETTINGS = {
     return { lat, lon, plain: !String(raw).trim().startsWith("~") };
   }
 
-  // GEO_SETTINGS.parks の形の一覧を読む → { parks: [{ id, label, draft, points: [{ lat, lon }] }], problems: [文] }
+  // data.js の SETTINGS.gps.parks（点は SETTINGS.hidden の名前）→ readParks で読める形（点は "~…" の文字）
+  //   → { list: [{ id, label, points: ["~…"] }], problems: [文] }
+  function parksFrom(list, hidden) {
+    const box = hidden && typeof hidden === "object" ? hidden : {};
+    const problems = [];
+    const out = (Array.isArray(list) ? list : []).map((p, i) => {
+      const label = p && p.label ? String(p.label) : (p && p.id) || `${i + 1}番目の公園`;
+      const points = [];
+      (p && Array.isArray(p.points) ? p.points : []).forEach((name, k) => {
+        if (typeof name === "string" && box[name] != null) points.push(box[name]);
+        else problems.push(`${label} の${k + 1}点目：「${name}」が、SETTINGS の hidden にありません。`);
+      });
+      return Object.assign({}, p, { label, points });
+    });
+    return { list: out, problems };
+  }
+
+  // 公園の一覧（点は "~…" の文字）を読む → { parks: [{ id, label, draft, points: [{ lat, lon }] }], problems: [文] }
   function readParks(list) {
     const parks = [];
     const problems = [];
@@ -247,12 +216,37 @@ const GEO_SETTINGS = {
     return { misses: n, manual: false };
   }
 
-  // n公園目に見つけたときの文（必要な数に達したら reached）
-  function hintFor(n, cfg) {
-    const t = cfg.text || {};
-    if (n >= cfg.need) return t.reached || "";
-    const list = Array.isArray(t.found) ? t.found : [];
-    return list.length ? list[Math.min(Math.max(n, 1), list.length) - 1] : "";
+  // ==============================================================
+  // 5. 表示する文を選ぶ（文は data.js の場面の search）
+  // ==============================================================
+  // n公園目に見つけたときの文：found は { first, more, reached }
+  //   1公園目は first、途中は more（必要な数が4以上でも、すべて more）、必要な数に達したら reached
+  function hintFor(n, cfg, found) {
+    const t = found || {};
+    const need = Math.max(1, Number(cfg.need) || 1);
+    if (n >= need) return t.reached || "";
+    return (n <= 1 ? t.first : t.more) || "";
+  }
+
+  // 文を { text, note } の形にする（文だけのときは、"…" と書いてもよい）
+  function textOf(x) {
+    if (x == null) return { text: "", note: "" };
+    if (typeof x === "string") return { text: x, note: "" };
+    return { text: x.text || "", note: x.note || "" };
+  }
+
+  // 結果 d に合う文 → { text, note }。n は見つけた数（手動で増やした分も入れる）
+  //   精度がとても低い（poorAccuracy 以上）ときの「位置がはっきりしない」は、poor の文にする
+  //   エラーは、拒否（code 1）→ denied、位置情報を使えないページ（code 0）→ unsupported、
+  //   取得失敗（code 2）・時間切れ（code 3）→ failed
+  function lineFor(d, n, cfg, texts) {
+    const t = texts || {};
+    const r = d && d.result;
+    if (r === "found" || r === "reached" || r === "manual") return { text: hintFor(n, cfg, t.found), note: "" };
+    if (r === "already" || r === "none") return textOf(t[r]);
+    if (r === "unclear") return textOf(Number.isFinite(d.best) && d.best >= Number(cfg.poorAccuracy) ? t.poor : t.unclear);
+    if (r === "error") return textOf(d.code === 1 ? t.denied : d.code === 0 ? t.unsupported : t.failed);
+    return { text: "", note: "" };
   }
 
   // 測った時刻 ts が、いま（now）より staleAfter より前なら、古い位置（数えない）
@@ -262,5 +256,198 @@ const GEO_SETTINGS = {
     return limit > 0 && Number.isFinite(ts) && now - ts > limit;
   }
 
-  window.GEO = { settings: GEO_SETTINGS, hide, unhide, distance, parsePoint, readParks, nearest, kindOf, classify, judge, missStep, hintFor, isStale };
+  // ==============================================================
+  // 6. 位置を測る（本編の「気配を探す」と、テストページで共通）
+  // ==============================================================
+  // track(o)：位置を測り続ける。結果は決めない（決めるのは check と、テストページ）
+  //   o.cfg      ：設定値（SETTINGS.gps）
+  //   o.geo      ：navigator.geolocation
+  //   o.limit    ：true なら時間を区切る。最初の位置（または返事）が届いてから timeout のあいだ測り、
+  //                何も届かなければ firstWait で打ち切る。新しい位置が pokeAfter 来ないときは、1回取りにいく。
+  //                false なら区切らない（テストページの監視モード）
+  //   o.onPosition(r)        ：位置が届いた（同じ位置が2回届いたときは、2回目は onDuplicate）
+  //                            r = { lat, lon, accuracy, ts（測った時刻）, at（届いた時刻）, source（"watch"・"get"） }
+  //                            古くない位置なら、呼ぶ側が fresh() を呼ぶ（取りにいく時刻の計算に使う）
+  //   o.onError(err, source, fatal)：エラー。fatal は拒否（code 1）で、測るのを止めたとき
+  //   o.onTimeUp({ answered, unavailable })：時間切れ（answered：位置か返事が届いた / unavailable：取得失敗があった）
+  //   o.onTick()、o.onPoke()：0.5秒ごと／取りにいったとき（表示と記録のため）
+  //   → { stop(), fresh(), info() }
+  function track(o) {
+    const cfg = o.cfg || {};
+    const geo = o.geo;
+    const limit = Boolean(o.limit);
+    const timeout = Number(cfg.timeout) || 15000;
+    const firstWait = Number(cfg.firstWait) || 60000;
+    const pokeAfter = Number(cfg.pokeAfter) || 3000;
+    const call = (name, ...args) => { if (typeof o[name] === "function") o[name](...args); };
+    const opts = (withTimeout) => Object.assign(
+      { enableHighAccuracy: cfg.highAccuracy !== false, maximumAge: Number(cfg.maximumAge) || 0 },
+      withTimeout ? { timeout } : {});
+    const seen = new Set();
+    let alive = true;
+    let first = 0;        // 最初の位置（または返事）が届いた時刻
+    let lastNew = 0;      // 最後に新しい位置が届いた時刻
+    let lastPoke = 0;
+    let poking = false;
+    let unavailable = false;
+    let fresh = 0;        // 届いた新しい位置の数
+    let timer = null;
+    let ticker = null;
+    let watchId = null;
+
+    function stop() {
+      if (!alive) return;
+      alive = false;
+      if (watchId != null) geo.clearWatch(watchId);
+      clearTimeout(timer);
+      clearInterval(ticker);
+    }
+    function timeUp() {
+      if (!alive) return;
+      const info = { answered: Boolean(first), unavailable };
+      stop();
+      call("onTimeUp", info);
+    }
+    // 最初の位置（または返事）が届いたら、そこから timeout のあいだ測る（許可の確認に答える時間は入れない）
+    function firstResponse() {
+      if (first) return;
+      first = Date.now();
+      lastNew = first;
+      if (limit) {
+        clearTimeout(timer);
+        timer = setTimeout(timeUp, timeout);
+      }
+    }
+    function onPos(pos, source) {
+      if (!alive) return;
+      firstResponse();
+      const c = pos.coords;
+      const r = { lat: c.latitude, lon: c.longitude, accuracy: c.accuracy, ts: pos.timestamp, at: Date.now(), source };
+      // 同じ位置が2回届いても、2回とは数えない（「2回続けて」を、別々の読み取りで数えるため）
+      const key = [r.ts, r.lat, r.lon, r.accuracy].join("|");
+      if (seen.has(key)) {
+        call("onDuplicate", r);
+        return;
+      }
+      seen.add(key);
+      call("onPosition", r);
+    }
+    function onErr(err, source) {
+      if (!alive) return;
+      const code = err && err.code;
+      if (code === 1) {
+        stop();
+        call("onError", err, source, true);
+        return;
+      }
+      call("onError", err, source, false);
+      firstResponse();
+      if (code === 2) unavailable = true;
+      // 新しい位置が1つも来ないまま、測る仕組みが時間切れを知らせてきたら、そこで終わる
+      if (code === 3 && source === "watch" && !fresh && limit) timeUp();
+    }
+    function tick() {
+      if (!alive) return;
+      const now = Date.now();
+      // 新しい位置がしばらく来ないときは、こちらから1回取りにいく（時間を区切るときだけ）
+      if (limit && first && !poking && now - Math.max(lastNew, lastPoke) > pokeAfter) {
+        poking = true;
+        lastPoke = now;
+        call("onPoke");
+        const remain = Math.max(1000, first + timeout - now);
+        geo.getCurrentPosition(
+          (pos) => { poking = false; onPos(pos, "get"); },
+          (err) => { poking = false; onErr(err, "get"); },
+          Object.assign(opts(false), { timeout: remain }));
+      }
+      call("onTick");
+    }
+
+    watchId = geo.watchPosition((pos) => onPos(pos, "watch"), (err) => onErr(err, "watch"), opts(limit));
+    if (limit) timer = setTimeout(timeUp, firstWait);
+    ticker = setInterval(tick, 500);
+    const api = {
+      stop,
+      fresh() {
+        fresh += 1;
+        lastNew = Date.now();
+      },
+      // left：残りの秒数（最初の位置か返事が届く前は null）
+      info: () => ({
+        alive, first, fresh, unavailable,
+        left: first ? Math.max(0, Math.ceil((first + timeout - Date.now()) / 1000)) : null,
+      }),
+    };
+    setTimeout(tick, 0);
+    return api;
+  }
+
+  // check(o)：1回の確認（本編の「気配を探す」とテストページの「現在地を確認」）
+  //   o.cfg・o.geo：track と同じ / o.parks：readParks の公園 / o.found：もう数えた公園の id
+  //   o.onDone(d)：結果（found・already・none・unclear・error）。1回だけ呼ぶ
+  //   o.onLog(kind, info)：記録用（kind：dup・stale・fresh・close・reading・error・poke・timeup）
+  //   o.onTick(info)：0.5秒ごと（info：track の info と、run：いま続いている回数）
+  //   → { stop() }（止めると、onDone は呼ばない）
+  function check(o) {
+    const cfg = o.cfg || {};
+    const j = judge(cfg, o.found, {});
+    const log = (kind, info) => { if (typeof o.onLog === "function") o.onLog(kind, info || {}); };
+    let done = false;
+    let t = null;
+    const finish = (d) => {
+      if (done) return;
+      done = true;
+      if (t) t.stop();
+      o.onDone(d);
+    };
+    t = track({
+      cfg, geo: o.geo, limit: true,
+      onDuplicate: (r) => log("dup", { r }),
+      onPosition(r) {
+        const obs = Object.assign(classify(o.parks, r.lat, r.lon, r.accuracy, cfg), { ts: r.ts });
+        const d = j.feed(obs, r.at);
+        if (d && d.skip === "stale") {
+          log("stale", { r, obs, age: d.age });
+          return;
+        }
+        t.fresh();
+        log("fresh", { r, obs });
+        if (d && d.skip === "close") {
+          log("close", { r, obs, since: d.since });
+          return;
+        }
+        log("reading", { r, obs, run: j.run() });
+        if (d) finish(d);
+      },
+      onError(err, source, fatal) {
+        log("error", { err, source });
+        if (fatal) finish({ result: "error", code: 1 });
+      },
+      onTimeUp(info) {
+        if (done) return;
+        let d = j.finish();
+        if (d.result === "noReading") d = { result: "error", code: info.unavailable ? 2 : 3, noAnswer: !info.answered };
+        log("timeup", { d });
+        finish(d);
+      },
+      onPoke: () => log("poke"),
+      onTick: () => { if (!done && typeof o.onTick === "function") o.onTick(Object.assign(t.info(), { run: j.run() })); },
+    });
+    return {
+      stop() {
+        done = true;
+        t.stop();
+      },
+    };
+  }
+
+  // この端末・このページで位置情報を使えるか（https:// で開いた公開ページなど）
+  function usable(nav, win) {
+    return Boolean(nav && nav.geolocation) && (!win || win.isSecureContext !== false);
+  }
+
+  window.GEO = {
+    hide, unhide, distance, parsePoint, parksFrom, readParks, nearest, kindOf, classify,
+    judge, missStep, hintFor, lineFor, isStale, track, check, usable,
+  };
 })();
