@@ -32,12 +32,17 @@ const GEO_SETTINGS = {
   //  points：判定する点（1〜3点）。どの点で見つけても、同じ1公園として数える
   //          （大きい公園は、入口ごとに点を書く）
   //  label ：テストページの表に出す名前（本編には出さない）。本当の公園名は書かない
-  //  draft ：true は【仮】の点。座標をいただくまでの置き場所で、赤道上の海の上にある（どこからも遠い）
+  //  draft ：true は【仮】の点（座標をいただくまでの置き場所）。今は全部、本当の座標（10/31 にいただいた）
   parks: [
-    { id: "park1", label: "公園1（入口3つ）", draft: true, points: ["~VUtGVVUdVEJJUUNVVUZVVR0=", "~VUtGVVUdVEJJUUNVVUdVVR0=", "~VUtGVVUdVEJJUUNVVURVVR0="] },
-    { id: "park2", label: "公園2", draft: true, points: ["~VUtGVFUdVEJJUUNVVUZVVR0="] },
-    { id: "park3", label: "公園3", draft: true, points: ["~VUtGV1UdVEJJUUNVVUZVVR0="] },
-    { id: "park4", label: "公園4", draft: true, points: ["~VUtGVlUdVEJJUUNVVUZVVR0="] },
+    { id: "parkA", label: "公園A", points: ["~VlBYUFwcVkBXTVxRVVhUVhxXRVQ="] },
+    { id: "parkB", label: "公園B", points: ["~VlBYUFwcV0VTTVxRVVhUVh1UQFM="] },
+    { id: "parkC", label: "公園C", points: ["~VlBYUFwfU0tQTVxRVVhUVh1cQlw="] },
+    { id: "parkD", label: "公園D", points: ["~VlBYUFwdUUVcTVxRVVhUVhhWRF0="] },
+    { id: "parkE", label: "公園E", points: ["~VlBYUF0VU0ZUTVxRVVhUVhlVSlQ="] },
+    { id: "parkF", label: "公園F", points: ["~VlBYUF0aUUFRTVxRVVhUVhtWQV0="] },
+    { id: "parkG", label: "公園G", points: ["~VlBYUFwcVkJXTVxRVVhUVhVTQFQ="] },
+    { id: "parkH", label: "公園H", points: ["~VlBYUFweUkNcTVxRVVhUVhVXRVc="] },
+    { id: "parkI", label: "公園I（入口3つ）", points: ["~VlBYUFwbV0dWTVxRVVhUVhtTQVY=", "~VlBYUFwZU0BRTVxRVVhUVhVQR1w=", "~VlBYUFwYVEVVTVxRVVhUVhtcSlM="] },
   ],
 
   // ---- 表示の文【仮】（設計書の側で決める） ----
