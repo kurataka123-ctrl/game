@@ -472,13 +472,18 @@
       return;
     }
     SES.seen.add(key);
+    const age = r.at - r.ts;
+    // 古い位置は数えない（maximumAge: 0 でも、iPhone は数十秒前の位置を届けることがある）
+    if (GEO.isStale(r.ts, r.at, CFG)) {
+      log(`古い位置が届いた（${(age / 1000).toFixed(1)}秒前。数えない）${tag}`);
+      return;
+    }
     SES.lastNew = r.at;
     SES.readings += 1;
     if (hiddenNow) SES.hidden += 1;
     lastPos = r;
     renderNow();
     renderTable();
-    const age = r.at - r.ts;
     const ageText = Number.isFinite(age) && Math.abs(age) >= 2000 ? `（位置の古さ ${(age / 1000).toFixed(1)}秒）` : "";
     if (SES.mode === "register") {
       registerFeed(r, tag + ageText);
@@ -740,6 +745,7 @@
       ["1回の確認で測る時間", `${(Number(CFG.timeout) || 15000) / 1000}秒（最初の位置か返事が届いてから）`],
       ["精度がとても低い目安", `${CFG.poorAccuracy} m 以上`],
       ["取得の設定", `enableHighAccuracy: ${CFG.highAccuracy !== false}／maximumAge: ${Number(CFG.maximumAge) || 0}`],
+      ["数えない古い位置", `${(Number(CFG.staleAfter) || 0) / 1000}秒より前に測った位置`],
       ["公園（geo.js）", `${cfgParks.length}か所・判定点 ${points}点${allDraft ? "（座標は【仮】）" : ""}`],
       ["仮の公園", `${rec.temps.length}か所`],
       ["この端末の保存名", `${STORE_KEY}（本編の記録とは別）`],
