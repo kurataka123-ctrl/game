@@ -16,6 +16,8 @@ const GEO_SETTINGS = {
   radius: 50,          // 判定する点からの半径（m）。この内側を「範囲内」とする
   accuracy: 30,        // 位置の精度（accuracy）の上限（m）。これより粗い位置では、見つけたことにしない
   streak: 2,           // 範囲内（または範囲外）が何回続いたら、結果を決めるか
+  minGap: 2000,        // 続けて数える読み取りの間隔（ミリ秒）。前の読み取りから、これ以上あとに測った位置だけ数える
+                       // （近すぎる位置は、判定に使わない。iPhone は2つの位置を同時に届けることがある。10/31 の実機で確認）
   need: 3,             // 気配を見つける必要がある公園の数。この数に達したら、3-2（リーフィア）へ進む
   timeout: 15000,      // 1回の確認で、位置を測り続ける時間（ミリ秒）。最初の位置（または返事）が届いてから数える
   poorAccuracy: 300,   // 精度がこれより粗いときは、「正確な位置情報」がオフかもしれないと案内する（m）
@@ -23,6 +25,8 @@ const GEO_SETTINGS = {
   maximumAge: 0,       // 前に測った位置を使い回さない（ミリ秒）
   staleAfter: 10000,   // これより前に測った位置（ミリ秒）は、届いても数えない
                        // （maximumAge: 0 でも、iPhone は数十秒前の位置を届けることがある。10/31 の実機で確認）
+  manualAfter: 3,      // 「気配を見つけたことにする」を出すまでに、続けて見つからなかった回数（気配なし・位置がはっきりしない）
+                       // （エラーのときは、1回目から出す）
 
   // ---- 公園と、判定する点 ----
   //  points：判定する点（1〜3点）。どの点で見つけても、同じ1公園として数える
@@ -166,25 +170,46 @@ const GEO_SETTINGS = {
   //   already：もう数えた公園で、範囲内が streak 回続いた
   //   none ：範囲外が streak 回続いた（監視モード〔watch〕では決めない）
   //   finish() は、時間切れのときの結果：
-  //     unclear（範囲内が一度でもあった・精度不足だけだった）/ none（範囲外だけだった）/ noReading（位置が1つも来なかった）
+  //     unclear（範囲内が一度でもあった・精度不足だけだった・古い位置だけが届いた）
+  //     / none（範囲外だけだった）/ noReading（位置が1つも来なかった）
   //   found：もう数えた公園の id の一覧
+  //
+  //   feed(obs, now) の obs は classify の結果に ts（測った時刻）を足したもの。now は届いた時刻
+  //   次の読み取りは数えずに { skip } を返す（判定に使わない。記録に残すのは呼ぶ側）：
+  //     stale：古い位置（staleAfter より前に測った）
+  //     close：続けて同じになるが、前の読み取りから minGap たっていない（ほぼ同じ読み取りを2回数えないため）
+  //            ちがう結果（範囲内のあとの範囲外など）は、近くても数える（そこから数え直す）
   function judge(cfg, found, opts) {
     const done = new Set(Array.isArray(found) ? found : []);
     const watch = Boolean(opts && opts.watch);
     const need = Math.max(1, Number(cfg.streak) || 1);
-    let run = { kind: "", park: null, n: 0 };
-    let readings = 0;
+    const gap = Math.max(0, Number(cfg.minGap) || 0);
+    let run = { kind: "", park: null, n: 0, ts: NaN };
+    let readings = 0;       // 判定に使った読み取り
+    let stale = 0;          // 古いので数えなかった読み取り
+    let close = 0;          // 前の読み取りに近すぎるので数えなかった読み取り
     let sawIn = false;
     let lastGood = null;    // 精度が足りた（in・out）最後の読み取り
     let best = Infinity;    // いちばん良かった精度（m）
     return {
-      feed(obs) {
+      feed(obs, now) {
+        const at = Number.isFinite(now) ? now : Date.now();
+        if (isStale(obs.ts, at, cfg)) {
+          stale += 1;
+          return { skip: "stale", age: at - obs.ts };
+        }
+        const same = run.kind === obs.kind && (obs.kind !== "in" || run.park === obs.park);
+        // 測った時刻が分からないときは、間隔を確かめずに数える
+        const since = obs.ts - run.ts;
+        if (same && gap > 0 && since < gap) {
+          close += 1;
+          return { skip: "close", since };
+        }
         readings += 1;
         if (Number.isFinite(obs.accuracy)) best = Math.min(best, obs.accuracy);
         if (obs.kind === "in") sawIn = true;
         if (obs.kind !== "poor") lastGood = obs;
-        const same = run.kind === obs.kind && (obs.kind !== "in" || run.park === obs.park);
-        run = same ? { kind: run.kind, park: run.park, n: run.n + 1 } : { kind: obs.kind, park: obs.park, n: 1 };
+        run = same ? { kind: run.kind, park: run.park, n: run.n + 1, ts: obs.ts } : { kind: obs.kind, park: obs.park, n: 1, ts: obs.ts };
         // ちょうど streak 回になったときだけ決める（監視モードで、同じ知らせを何度も出さないため）
         if (run.n !== need) return null;
         if (obs.kind === "in") return Object.assign({ result: done.has(obs.park) ? "already" : "found" }, obs);
@@ -192,12 +217,29 @@ const GEO_SETTINGS = {
         return null;
       },
       finish() {
-        if (!readings) return { result: "noReading" };
+        // 新しい位置が1つも来ず、古い位置だけが届いたときは、「気配なし」にしない
+        if (!readings) return stale ? { result: "unclear", best, sawIn: false, lastGood: null, staleOnly: true, stale } : { result: "noReading" };
         if (lastGood && !sawIn) return Object.assign({ result: "none" }, lastGood, { best });
         return { result: "unclear", best, sawIn, lastGood };
       },
       run: () => Object.assign({}, run, { need }),
+      counts: () => ({ readings, stale, close }),
     };
+  }
+
+  // 「気配を見つけたことにする」を出すか。続けて見つからなかった回数（misses）を、結果ごとに進める
+  //   found・reached・manual（手動で数を増やした）→ 0 にもどす
+  //   none・unclear → 1 増やす。manualAfter 回に達したら出す
+  //   already → そのまま（失敗にも成功にも数えない）
+  //   error（拒否・取得失敗・時間切れ）→ 回数はそのままで、1回目から出す
+  //   → { misses（新しい回数）, manual（ボタンを出すか） }
+  function missStep(misses, result, cfg) {
+    const n = Math.max(0, Math.floor(Number(misses) || 0));
+    const after = Math.max(1, Math.floor(Number(cfg.manualAfter) || 1));
+    if (result === "found" || result === "reached" || result === "manual") return { misses: 0, manual: false };
+    if (result === "none" || result === "unclear") return { misses: n + 1, manual: n + 1 >= after };
+    if (result === "error") return { misses: n, manual: true };
+    return { misses: n, manual: false };
   }
 
   // n公園目に見つけたときの文（必要な数に達したら reached）
@@ -215,5 +257,5 @@ const GEO_SETTINGS = {
     return limit > 0 && Number.isFinite(ts) && now - ts > limit;
   }
 
-  window.GEO = { settings: GEO_SETTINGS, hide, unhide, distance, parsePoint, readParks, nearest, kindOf, classify, judge, hintFor, isStale };
+  window.GEO = { settings: GEO_SETTINGS, hide, unhide, distance, parsePoint, readParks, nearest, kindOf, classify, judge, missStep, hintFor, isStale };
 })();
