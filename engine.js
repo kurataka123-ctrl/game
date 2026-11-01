@@ -35,7 +35,7 @@
   const SND = window.SOUND || {
     init() {}, play: () => false, preview() {}, ambient() {}, setMode() {}, isOn: () => false, setOn() {},
     has: () => false, isLoop: () => false, isShort: () => false, names: () => [], label: () => "",
-    bgm() {}, hasBgm: () => false, bgmNames: () => [], bgmLabel: () => "", previewBgm() {}, bgmDetail: () => ({}),
+    bgm() {}, primeBgm() {}, hasBgm: () => false, bgmNames: () => [], bgmLabel: () => "", previewBgm() {}, bgmDetail: () => ({}),
     state: () => ({ supported: false, context: "none", on: false, mode: "off", ambient: null, bgm: null, bgmPlaying: null }),
   };
 
@@ -93,6 +93,12 @@
   function T(key, vars) {
     const s = TX[key] == null ? key : String(TX[key]);
     return fill(vars ? s.replace(/\{(\w+)\}/g, (whole, k) => (k in vars ? String(vars[k]) : whole)) : s);
+  }
+
+  // 会話の行の {guess} などを、vars の値に置きかえる（1-1 の名前の確認の呼び名）。{name} などは、表示するときに置きかえる
+  function withVars(lines, vars) {
+    const rep = (s) => String(s == null ? "" : s).replace(/\{(\w+)\}/g, (whole, k) => (k in vars ? String(vars[k]) : whole));
+    return toArray(lines).map((ln) => (ln && typeof ln === "object" ? { ...ln, text: rep(ln.text) } : rep(ln)));
   }
 
   // 表示用に隠す：駅名など、ページに直接書きたくない文字を読めない形にする（元に戻せる）
@@ -211,13 +217,15 @@
     return { who: null, text: fill(s.replace(/^[：:]/, "")), suspect };
   }
 
-  // 会話の1行を、画面に出す形にする（演出の行は { effect }、文の行は parseLine と、鳴らす音 sound・光らせる仲間 glow・光らない仲間を暗くする dim）
+  // 会話の1行を、画面に出す形にする（演出の行は { effect }、文の行は parseLine と、鳴らす音 sound・光らせる仲間 glow・光らない仲間を暗くする dim・
+  // その行のあいだ出す絵 image）
   function toLine(ln) {
     if (isEffect(ln)) return { effect: ln };
     const p = parseLine(ln);
     if (ln && typeof ln === "object" && ln.sound) p.sound = ln.sound;
     if (ln && typeof ln === "object" && ln.glow !== undefined) p.glow = toArray(ln.glow);
     if (ln && typeof ln === "object" && ln.dim) p.dim = true;
+    if (ln && typeof ln === "object" && typeof ln.image === "string" && ln.image.trim()) p.image = ln.image.trim();
     return p;
   }
 
@@ -281,6 +289,45 @@
       node.classList.add("has-art");
     });
     return node;
+  }
+
+  // 名前の確認（1-1。data.js の input の check）に使う一覧：pc-images/name.js（書き方は name.sample.js）
+  //   PCで index.html を直接開いたとき（file://）だけ読みこむ。公開したページ（iPhone）では読みこまない。
+  //   結果：{ list, status }。status は "ok"（使える）/ "none"（ファイルがない）/ "empty"（NAME_LIST がない・names が空）/ "off"（直接開いていない）
+  //   list が null のときは、名前を確認せずに進む
+  let nameLoad = null;
+  function loadNames() {
+    if (!nameLoad) {
+      nameLoad = new Promise((resolve) => {
+        if (!ART_DIR) { resolve({ list: null, status: "off" }); return; }
+        const s = document.createElement("script");
+        s.onload = () => {
+          const list = readNames(tryGet(() => NAME_LIST));
+          resolve({ list, status: list ? "ok" : "empty" });
+        };
+        s.onerror = () => resolve({ list: null, status: "none" });
+        s.src = `${ART_DIR}/name.js`;
+        document.head.append(s);
+      });
+    }
+    return nameLoad;
+  }
+  // name.js の NAME_LIST を、比べやすい形にそろえる（names が1つもなければ null）
+  //   names：下の名前の一覧 / family：名字の一覧（名字＋名前でも通す）/ guess：「もしかして」で聞く呼び名（なければ names の1つ目）
+  function readNames(raw) {
+    if (!raw || typeof raw !== "object") return null;
+    const words = (v) => toArray(v).map((w) => String(w == null ? "" : w).trim()).filter((w) => norm(w));
+    const names = words(raw.names);
+    if (!names.length) return null;
+    const family = words(raw.family);
+    const guess = words(raw.guess)[0] || names[0];
+    return { names: names.map(norm), family: family.map(norm), guess, counts: { names: names.length, family: family.length } };
+  }
+  // 入れた名前が、一覧にあるか（空白を除き、カタカナはひらがなにそろえて比べる。名字＋名前でも通す）
+  function nameListed(list, text) {
+    const t = norm(text);
+    if (!t) return false;
+    return list.names.includes(t) || list.family.some((f) => list.names.some((g) => f + g === t));
   }
 
   // ==============================================================
@@ -382,7 +429,11 @@
   const chat = buildChat();
   const overlay = el("div", { class: "overlay", role: "dialog", "aria-modal": "true" });
   const toastBox = el("div", { class: "toast-box", "aria-live": "polite" });
-  app.append(titleScreen, keywordScreen, novel.root, chat.root, endScreen, overlay, toastBox);
+  // はじめの演出（1-1。data.js の場面の intro）で、画面を暗くする幕。演出のあいだは、クリックで飛ばせる
+  //   intro：演出の途中だけ { skip, ready, … }（下の playIntro）
+  let intro = null;
+  const veil = el("div", { class: "veil", "aria-hidden": "true", onclick: () => { if (intro) intro.skip(); } });
+  app.append(titleScreen, keywordScreen, novel.root, chat.root, endScreen, overlay, toastBox, veil);
 
   const views = { title: titleScreen, keyword: keywordScreen, novel: novel.root, chat: chat.root, end: endScreen };
   function show(name) {
@@ -425,15 +476,19 @@
     const puzzleBox = el("div", { class: "puzzle-box", hidden: true });
     const battleBox = el("div", { class: "battle-box", hidden: true }); // 戦い
     const houseBox = el("div", { class: "house-box", hidden: true });   // 家全体の地図
+    // 行の絵（data.js の行の image。4-3 の回想のイラスト。PCで直接開いたときだけ）と、絵を出す・消すときの暗転
+    const pictureImg = el("img", { class: "stage-picture-img", alt: "", draggable: "false" });
+    const picture = el("div", { class: "stage-picture", hidden: true, "aria-hidden": "true" }, pictureImg);
+    const shade = el("div", { class: "stage-shade", "aria-hidden": "true" });
     const layer = el("div", { class: "stage-layer" });
     const draft = el("div", { class: "draft-badge", text: T("draft"), hidden: true });
-    const stage = el("div", { class: "stage" }, chars, roomBox, gridBox, puzzleBox, battleBox, houseBox, layer, draft);
+    const stage = el("div", { class: "stage" }, chars, roomBox, gridBox, puzzleBox, battleBox, houseBox, picture, shade, layer, draft);
     const name = el("div", { class: "nameplate", hidden: true });
     const text = el("div", { class: "text" });
     const mark = el("div", { class: "next-mark", text: "▼", hidden: true, "aria-hidden": "true" });
     const box = el("div", { class: "textbox", tabindex: "0" }, name, text, mark);
     const root = el("section", { class: "screen novel" }, topbar, stage, box);
-    return { root, chapter, partyBtn, chars, roomBox, gridBox, puzzleBox, battleBox, houseBox, layer, draft, stage, name, text, mark, box };
+    return { root, chapter, partyBtn, chars, roomBox, gridBox, puzzleBox, battleBox, houseBox, picture, pictureImg, shade, layer, draft, stage, name, text, mark, box };
   }
 
   // 文字送りの短い音を鳴らさない文字（空白・句読点・「…」・かっこなど）
@@ -472,7 +527,8 @@
 
   // auto：話し手のいない行を、自動で次へ進めるまでの時間（戦いの文）。onLine：行を出すたびに呼ぶ
   // exploreNext：地図を調べ終えたあと、先へ進む関数 / house：家全体の地図（2-7・4-3・4-5）
-  const NV = { lines: [], idx: 0, then: null, hold: true, typer: null, mode: "idle", shown: [], auto: 0, onLine: null, autoTimer: null, exploreNext: null, house: null, glow: false };
+  // picture：いま出している行の絵（画像の場所。出していなければ ""）/ picTimer：絵を出す・消すときの暗転の時計
+  const NV = { lines: [], idx: 0, then: null, hold: true, typer: null, mode: "idle", shown: [], auto: 0, onLine: null, autoTimer: null, exploreNext: null, house: null, glow: false, picture: "", picTimer: null };
 
   // 選択肢・入力欄などを表示する（null で消す）
   // 表示中はキャラクターを上によせて、重ならないようにする
@@ -535,6 +591,118 @@
     return ln.who && ln.who !== "hero" ? [ln.who] : [];
   }
 
+  // ---- 行の絵（data.js の行の image。4-3 の回想のイラスト） ----
+  //   PCで index.html を直接開いたとき（file://）だけ、pc-images の中の画像を探す。公開したページ（iPhone）では探さない。
+  //   絵のある行のあいだは、ゲーム画面の部分（会話の枠より上）に、その絵を切り取らずに全体を収めて出す（余白は暗い色）。
+  //   絵が変わる行（出す・別の絵にする・消す）では、暗転（場面の imageFade）をはさんでから、文を出す。
+  //   画像が見つからない行は、絵を出さずに、今までどおり（glow の形）で進む
+  const picFound = {};   // 画像の場所（data.js の image）→ 探した結果の Promise
+  const picDone = {};    // 探し終えた結果（見つかれば画像の場所、なければ ""）
+  function findPicture(path) {
+    if (!picFound[path]) {
+      picFound[path] = new Promise((resolve) => {
+        const img = new Image();
+        let timer = null;
+        const done = (src) => {
+          if (Object.prototype.hasOwnProperty.call(picDone, path)) return;
+          clearTimeout(timer);
+          picDone[path] = src;
+          resolve(src);
+        };
+        img.onload = () => done(img.src);
+        img.onerror = () => done("");
+        timer = setTimeout(() => done(""), 4000);   // 4秒たっても読めなければ、ないものとして進む（止まらないように）
+        // カタカナの名前も読めるように、フォルダ名・ファイル名を1つずつ URL の形にする
+        img.src = `${ART_DIR}/${String(path).split("/").map(encodeURIComponent).join("/")}`;
+      });
+    }
+    return picFound[path];
+  }
+  // その行で出す絵：見つかれば画像の場所、出さないときは ""、まだ探しているときは undefined
+  function pictureOf(ln) {
+    if (!ln.image || !ART_DIR || currentView !== "novel") return "";
+    findPicture(ln.image);
+    return Object.prototype.hasOwnProperty.call(picDone, ln.image) ? picDone[ln.image] : undefined;
+  }
+  // 幕（暗転・はじめの演出）の濃さを、ms かけて opacity にする。ms が 0 なら、途中の変化も止めて、すぐに変える
+  //   （変化の途中で長さだけを 0 にしても、始まった変化は止まらないため）
+  function fadeStyle(node, opacity, ms) {
+    const len = Math.max(0, Number(ms) || 0);
+    if (!len) {
+      node.style.transitionProperty = "none";
+      node.style.opacity = String(opacity);
+      void node.offsetWidth;   // 変化をなくした状態を、画面に確定させる
+      node.style.transitionProperty = "";
+      return;
+    }
+    node.style.transitionDuration = `${len}ms`;
+    node.style.opacity = String(opacity);
+  }
+  // 暗転の幕（ゲーム画面の部分だけ。会話の枠は暗くしない）。ms かけて、暗くする（on）・明るくもどす
+  function setShade(on, ms) {
+    fadeStyle(novel.shade, on ? 1 : 0, ms);
+  }
+  // 絵を入れかえる（"" で消して、いまの画面〔キャラクターの並び〕にもどす）
+  function showPicture(src) {
+    NV.picture = src || "";
+    if (src) novel.pictureImg.src = src;
+    else novel.pictureImg.removeAttribute("src");
+    novel.picture.hidden = !src;
+    novel.stage.classList.toggle("picture-mode", Boolean(src));
+    novel.root.classList.toggle("picture-mode", Boolean(src));   // 会話の枠の影を、絵にかけないため（style.css）
+  }
+  // 絵が変わる行：暗くなる → 絵を入れかえる → 明るくなる → i 行目の文を出す
+  //   暗転の長さは、場面の imageFade（ミリ秒。書かなければ 1000）。暗くなるのと明るくなるのに、半分ずつ使う。
+  //   暗転のあいだは、クリック・Enter でも進まない（演出の行の wait と同じ）
+  function swapPicture(i, src) {
+    const token = gen;
+    const lines = NV.lines;
+    const sc = SCN[state.scene] || {};
+    const half = (Number(sc.imageFade) >= 0 ? Number(sc.imageFade) : 1000) / 2;
+    const alive = () => token === gen && NV.lines === lines && NV.mode === "pause";
+    clearTimeout(NV.autoTimer);
+    clearTimeout(NV.picTimer);
+    if (NV.typer) { NV.typer.cancel(); NV.typer = null; }
+    NV.mode = "pause";
+    novel.mark.hidden = true;
+    novel.text.textContent = "";   // 前の行の文は、暗くなり始めるときに消す
+    setShade(true, half);
+    NV.picTimer = setTimeout(() => {
+      if (!alive()) return;
+      showPicture(src);
+      // 明るくなる前に、次の行の光り方にしておく（絵を消して、キャラクターの並びにもどるとき用）
+      const ln = NV.lines[i];
+      setSpeaker(ln.who, glowOf(ln), ln.dim);
+      setShade(false, half);
+      NV.picTimer = setTimeout(() => {
+        NV.picTimer = null;
+        if (!alive()) return;
+        NV.mode = "talk";
+        nvText(i);
+      }, half);
+    }, half);
+  }
+  // 行の絵を、まだ探しているとき：見つかるか、ないと分かるまで待ってから、i 行目を出す
+  function waitPicture(i, ln) {
+    const token = gen;
+    const lines = NV.lines;
+    clearTimeout(NV.autoTimer);
+    NV.mode = "pause";
+    novel.mark.hidden = true;
+    findPicture(ln.image).then(() => {
+      if (token !== gen || NV.lines !== lines || NV.mode !== "pause") return;
+      NV.mode = "talk";
+      nvText(i);
+    });
+  }
+  // 場面に入るとき：絵と暗転を片づける
+  function clearPicture() {
+    clearTimeout(NV.picTimer);
+    NV.picTimer = null;
+    setShade(false, 0);
+    showPicture("");
+  }
+
   // 演出の行（data.js の { house: … } など）を行う。文は出さない
   function runEffect(fx) {
     if (fx.house !== undefined) showHouse(fx.house, true);
@@ -581,6 +749,10 @@
     }
     NV.idx = i;
     const ln = NV.lines[i];
+    // 行の絵（data.js の image。PCで直接開いたときだけ）：絵が変わる行では、暗転をはさんでから文を出す
+    const pic = pictureOf(ln);
+    if (pic === undefined) { waitPicture(i, ln); return; }
+    if (pic !== NV.picture) { swapPicture(i, pic); return; }
     // 文のある行が、もう残っていなければ最後の行（うしろの演出は、ここで行う）
     const last = !NV.lines.slice(i + 1).some((l) => !l.effect);
     if (last) for (const l of NV.lines.slice(i + 1)) runEffect(l.effect);
@@ -651,6 +823,7 @@
       NV.exploreNext = null;
       if (NV.house) NV.house.stop();
       NV.house = null;
+      clearPicture();
       GRID.key = null;
       novel.gridBox.hidden = true;
       novel.gridBox.replaceChildren();
@@ -724,7 +897,11 @@
     // opts.auto：話し手のいない行を、自動で次へ進めるまでの時間 / opts.onLine(i)：i 行目を出すときに呼ぶ
     say(lines, then, hold = true, opts) {
       clearTimeout(NV.autoTimer);
+      // 絵を入れかえている途中なら、やめて暗転を消す（新しい行で、もう一度決める）
+      if (NV.picTimer) { clearTimeout(NV.picTimer); NV.picTimer = null; setShade(false, 0); }
       NV.lines = toArray(lines).filter(visible).map(toLine);
+      // 行の絵（image）は、先に探しはじめておく（場面のはじめの余韻のあいだに、見つかるかが分かる）
+      if (ART_DIR) for (const l of NV.lines) if (l.image) findPicture(l.image);
       NV.then = then;
       NV.hold = hold;
       NV.auto = (opts && opts.auto) || 0;
@@ -2994,12 +3171,16 @@
   }
 
   // jump：合言葉やテスト用メニューで、途中の場面へ直接とんだとき
-  function runScene(id, jump = false) {
+  // opts.intro：はじめの演出（playIntro）から始めるとき。会話の文は、演出が終わってから出す（opts.intro.ready）
+  // opts.bgmFade：場面の曲を始めるときのフェードの長さ（ミリ秒。はじめの演出で、小さい音から始めるため）
+  function runScene(id, jump = false, opts = null) {
     const sc = SCN[id];
     if (!sc) {
       toast(T("noScene", { id }));
       return;
     }
+    // ほかの方法で場面へ進んだら（テスト用メニューなど）、はじめの演出はやめる
+    if (intro && !(opts && opts.intro === intro)) stopIntro();
     gen += 1;
     GRID.key = null;
     closeOverlay();
@@ -3027,13 +3208,15 @@
     //   くり返す音（ambient）と曲（bgm）は、場面ごとに決める（同じ音・曲が続く場面では、鳴らしたまま）
     SND.setMode(sc.mute ? "off" : sc.mode === "chat" ? "short" : "full");
     SND.ambient(sc.ambient || null);
-    SND.bgm(sceneBgm(sc));
+    SND.bgm(sceneBgm(sc), opts && opts.bgmFade);
     const view = sc.mode === "chat" ? ChatView : NovelView;
     view.enter(sc);
     // 選択肢・入力・クイズがある場面は、最後の行のあとすぐに表示する
     // （地図を調べる・歩く・氷の床の場面は、最後の行を読み終えてから始める）
     const waitsForPlayer = Boolean(hasChoices(sc) || sc.input || sc.quiz);
-    view.say(skipLines ? [] : sc.lines, () => afterLines(sc, view), !waitsForPlayer);
+    const start = () => view.say(skipLines ? [] : sc.lines, () => afterLines(sc, view), !waitsForPlayer);
+    if (opts && opts.intro) opts.intro.ready(start);
+    else start();
   }
 
   // room: "look" は地図を見せるだけ（調べない）
@@ -3210,9 +3393,46 @@
     view.input(spec, (text) => {
       // name: true → 入力した文字を、主人公の名前として記録する（正解・不正解はない）
       if (spec.name) {
-        state.name = Array.from(text).slice(0, 12).join("");
-        storage.save(state);
-        view.say(toArray(spec.correct), () => runScene(spec.next), true);
+        const takeName = (name) => {
+          state.name = Array.from(name).slice(0, 12).join("");
+          storage.save(state);
+          view.say(toArray(spec.correct), () => runScene(spec.next), true);
+        };
+        // check があれば、name.js の一覧と照らす（1-1。PCで直接開いたときだけ。name.js がなければ確認しない）
+        if (!spec.check || view !== NovelView) {
+          takeName(text);
+          return;
+        }
+        const token = gen;
+        loadNames().then(({ list }) => {
+          if (token !== gen) return;
+          if (!list || nameListed(list, text)) {
+            takeName(text);   // 一覧で通ったときは、入れたとおりの表記を名前にする
+            return;
+          }
+          const ck = spec.check;
+          const miss = misses + 1;
+          const every = Math.floor(Number(ck.after)) > 0 ? Math.floor(Number(ck.after)) : 3;
+          const again = () => askInput(sc, view, miss, hints);
+          if (ck.ask && miss % every === 0) {
+            // 続けて一覧にない名前だったとき：name.js の呼び名で「もしかして」と聞く
+            view.say(withVars(ck.ask, { guess: list.guess }), () => {
+              if (token !== gen) return;
+              view.choices([{ text: ck.yes || "うん", yes: true }, { text: ck.no || "ちがう" }], (c) => {
+                if (c.yes) {
+                  takeName(list.guess);
+                  return;
+                }
+                // 「ちがう」：問いの文を消してから、名前の入力にもどる
+                novel.text.textContent = "";
+                setSpeaker(null);
+                again();
+              });
+            }, false);
+            return;
+          }
+          view.say(toArray(ck.wrong || T("wrong")), again, false);
+        });
       } else if (isAnswer(text, spec.answers)) {
         inputSound("correct");   // 正解音（入力欄の全体。data.js の SETTINGS.inputSound）
         view.say(toArray(spec.correct), () => runScene(spec.next), true);
@@ -3458,6 +3678,7 @@
   }
 
   function showTitle() {
+    stopIntro();
     gen += 1;
     GRID.key = null;
     if (NV.typer) { NV.typer.cancel(); NV.typer = null; }
@@ -3492,10 +3713,81 @@
       state = freshState();
       storage.clear();
       updateParty();
-      runScene(S.start);
+      // はじめの場面に intro（はじめの演出）があれば、画面を暗くしてから始める（1-1 の森）
+      if (SCN[S.start] && SCN[S.start].intro && SCN[S.start].mode !== "chat") playIntro(S.start);
+      else runScene(S.start);
     };
     if (hasSave) confirmBox(T("confirmNew"), T("newGame"), go);
     else go();
+  }
+
+  // ---- はじめの演出（設計書 1-1。data.js の場面の intro） ----
+  //   タイトルの「はじめから」で始めたときだけ行う（つづきから・なかまの場面へ・合言葉・テスト用メニューでは行わない）
+  //   1. タイトルの画面が、dark ミリ秒かけて暗くなる
+  //   2. 場面（森のマップ）が、appear ミリ秒かけて現れる。場面の曲も、同じ時間をかけて小さい音から始まる
+  //   3. 場面の文（lines）を出す
+  //   演出のあいだは、Enter・スペース・クリック（タップ）で飛ばせる（すぐにマップを出して、3 へ）
+  const introMs = (v, d) => (v != null && Number(v) >= 0 ? Number(v) : d);
+  function setVeil(opacity, ms) {
+    fadeStyle(veil, opacity, ms);
+  }
+  function stopIntro() {
+    if (!intro) return;
+    clearTimeout(intro.timer);
+    intro = null;
+    veil.classList.remove("on");
+    setVeil(0, 0);
+  }
+  function playIntro(id) {
+    const spec = SCN[id].intro || {};
+    const dark = introMs(spec.dark, 2000);
+    const appear = introMs(spec.appear, 2000);
+    stopIntro();
+    gen += 1;   // タイトルの画面のタイマーなどを止める
+    // 「はじめから」のボタンが選ばれたままだと、Enter でもう一度押されてしまうので、外しておく
+    if (document.activeElement && typeof document.activeElement.blur === "function") document.activeElement.blur();
+    const it = { phase: "dark", timer: null, begin: null, skipping: false };
+    intro = it;
+    // 曲は、森のマップが現れるときに始める。クリックの処理の中で、先に音を出さずに準備しておく（sound.js の primeBgm）
+    const song = sceneBgm(SCN[id]);
+    if (song) SND.primeBgm(song);
+    // 1. 暗くする（幕を透明から黒へ）
+    veil.classList.add("on");
+    setVeil(0, 0);
+    void veil.offsetWidth;   // 透明な状態を確定してから、暗くし始める
+    setVeil(1, dark);
+    // 演出を終えて、場面の文を出す
+    const finish = () => {
+      if (intro !== it) return;
+      intro = null;
+      clearTimeout(it.timer);
+      veil.classList.remove("on");
+      setVeil(0, 0);
+      if (it.begin) it.begin();
+    };
+    // 2. 幕のうしろで場面を出してから、幕を少しずつ透明にする（曲も小さい音から）
+    const reveal = () => {
+      if (intro !== it) return;
+      it.phase = "appear";
+      runScene(id, false, { intro: it, bgmFade: it.skipping ? 0 : appear });
+    };
+    // runScene から呼ばれる（start：場面の文を出す関数）
+    it.ready = (start) => {
+      it.begin = start;
+      if (it.skipping) { finish(); return; }
+      void veil.offsetWidth;
+      setVeil(0, appear);
+      it.timer = setTimeout(finish, appear);
+    };
+    // Enter・スペース・クリックで飛ばす
+    it.skip = () => {
+      if (intro !== it) return;
+      it.skipping = true;
+      clearTimeout(it.timer);
+      if (it.phase === "dark") reveal();
+      else finish();
+    };
+    it.timer = setTimeout(reveal, dark);
   }
 
   // 保存した記録を、ゲームで使える形にそろえる（足りない項目や、こわれた項目を直す）
@@ -3742,6 +4034,10 @@
           if (ln.wait != null) warnings.push(`${at}：wait は、文のない演出の行にだけ書けます（この行では使われません）。`);
           for (const g of toArray(ln.glow)) if (!CHARS[g]) errors.push(`${at} の glow：「${g}」というキャラクターがいません。`);
           if (ln.dim !== undefined && typeof ln.dim !== "boolean") errors.push(`${at} の dim は、true か false にしてください。`);
+          // 行の絵（4-3 の回想のイラスト）：pc-images の中の場所（例："kaisou/グレイシア.png"）
+          if (ln.image !== undefined && (typeof ln.image !== "string" || !ln.image.trim() || /^[\\/]|\.\./.test(ln.image.trim()))) {
+            errors.push(`${at} の image は、"kaisou/グレイシア.png" のように、pc-images の中の画像の場所を書いてください。`);
+          }
         }
         checkText(ln && typeof ln === "object" ? ln.text : ln, where, allow);
         const p = parseLine(ln);
@@ -3802,8 +4098,38 @@
           check(inp.skip.next, `${at} の skip`);
           checkLines(inp.skip.reply, `${at} の skip の reply`);
         }
+        // 名前の確認（1-1。pc-images/name.js の一覧と照らす）
+        if (inp.check != null) {
+          const ck = inp.check;
+          if (!ck || typeof ck !== "object") errors.push(`${at} の input の check は、{ wrong: "…", after: 3, ask: "…", yes: "うん", no: "ちがう" } の形で書いてください（forest_name を参照）。`);
+          else {
+            if (!inp.name) warnings.push(`${at} の input の check：名前の入力（name: true）でないので、使われません。`);
+            if (sc.mode === "chat") warnings.push(`${at} の input の check：名前の確認はPCの場面だけです（メッセージ形式〔chat〕では確認しません）。`);
+            checkLines(ck.wrong, `${at} の input の check の wrong`);
+            checkLines(ck.ask, `${at} の input の check の ask`, ["guess"]);
+            if (ck.after != null && !(Math.floor(Number(ck.after)) >= 1)) errors.push(`${at} の input の check の after は、1 以上の数にしてください。`);
+            for (const key of ["yes", "no"]) if (ck[key] != null && typeof ck[key] !== "string") errors.push(`${at} の input の check の ${key} は、ボタンの文字（"うん" など）にしてください。`);
+            if (!ck.ask) warnings.push(`${at} の input の check に ask がないので、続けてまちがえても「もしかして」とは聞きません。`);
+          }
+        }
       }
       if (sc.quiz) checkQuiz(sc, at, errors, warnings, checkLines, checkText);
+      // 行の絵（image）と、暗転の長さ（imageFade）
+      if (sc.imageFade !== undefined && !(Number(sc.imageFade) >= 0)) errors.push(`${at} の imageFade は、0 以上の数（ミリ秒）にしてください。`);
+      if (sc.mode === "chat" && toArray(sc.lines).some((ln) => ln && typeof ln === "object" && ln.image !== undefined)) {
+        warnings.push(`${at}：メッセージ形式（chat）では、行の絵（image）は出ません。`);
+      }
+      // はじめの演出（intro。1-1 の森）
+      if (sc.intro !== undefined) {
+        const it = sc.intro;
+        if (!it || typeof it !== "object") errors.push(`${at} の intro は、{ dark: 2000, appear: 2000 } の形で書いてください。`);
+        else {
+          for (const key of ["dark", "appear"]) if (it[key] != null && !(Number(it[key]) >= 0)) errors.push(`${at} の intro の ${key} は、0 以上の数（ミリ秒）にしてください。`);
+          for (const key of Object.keys(it)) if (!["dark", "appear"].includes(key)) warnings.push(`${at} の intro の「${key}」は使えません（dark・appear）。`);
+        }
+        if (id !== S.start) warnings.push(`${at} の intro：はじめの演出は、「はじめから」で始まる場面（SETTINGS の start：${S.start}）でだけ行います。`);
+        if (sc.mode === "chat") warnings.push(`${at} の intro：メッセージ形式（chat）の場面では、はじめの演出は行いません。`);
+      }
       if (sc.ice) {
         const raw = parseIce(sc.ice);
         const wm = sc.walk ? lookMap(sc.walk, "nature") : null;
@@ -4545,6 +4871,41 @@
       el("p", { class: "debug-note", text: "どの場面でどの音・曲を鳴らすかは、data.js の場面に書きます（README の「音とエフェクト」）。くり返す音（風）は4秒、曲は8秒で止まります。曲の音量は、data.js の SETTINGS の bgm の volume です。" }));
   }
 
+  // PCだけのフォルダ（pc-images）の点検：名前の一覧（name.js）と、行の絵（image。4-3 の回想のイラスト）が読めるか
+  //   名前そのものは表示しない（数だけ）。絵は、見つからない画像の名前を出す
+  function pcFilesTool() {
+    const box = el("div", { class: "debug-kw" });
+    if (!ART_DIR) {
+      box.append(el("p", { class: "debug-note", text: "PCで index.html を直接開いたときだけ使います（今の開き方では、pc-images を読みにいきません）。" }));
+      return box;
+    }
+    const nameInfo = el("div", { text: "名前の一覧（name.js）：調べています……" });
+    loadNames().then(({ list, status }) => {
+      nameInfo.textContent = status === "ok"
+        ? `名前の一覧（name.js）：読みこめた（名前 ${list.counts.names}つ・名字 ${list.counts.family}つ）。1-1で名前を確認します。`
+        : status === "empty"
+          ? "名前の一覧（name.js）：ファイルはあるが、NAME_LIST の names が読めない（書きまちがいかもしれません。name.sample.js と見くらべてください）。名前は確認せずに進みます。"
+          : `名前の一覧（name.js）：${ART_DIR}/name.js が見つからない。名前は確認せずに進みます。`;
+    });
+    const paths = [];
+    for (const sc of Object.values(SCN)) {
+      for (const ln of toArray(sc && sc.lines)) {
+        const p = ln && typeof ln === "object" && typeof ln.image === "string" ? ln.image.trim() : "";
+        if (p && !paths.includes(p)) paths.push(p);
+      }
+    }
+    const picInfo = el("div", { text: paths.length ? "行の絵（image）：調べています……" : "行の絵（image）：data.js に書かれていません。" });
+    if (paths.length) {
+      Promise.all(paths.map(findPicture)).then((srcs) => {
+        const missing = paths.filter((p, i) => !srcs[i]);
+        picInfo.textContent = `行の絵（image）：${paths.length}枚のうち ${paths.length - missing.length}枚が見つかった。`
+          + (missing.length ? `見つからない画像（その行は光らせる形で進む）：${missing.join("・")}` : "");
+      });
+    }
+    box.append(nameInfo, picInfo);
+    return box;
+  }
+
   function setupDebug(problems) {
     const base = location.href.split(/[?#]/)[0];
     const online = /^https?:$/.test(location.protocol);
@@ -4578,6 +4939,8 @@
       localTool(),
       el("h4", { text: "遊ぶ前の準備：プレゼントの場所（4-5。このPCだけに記録）" }),
       presentTool(),
+      el("h4", { text: "遊ぶ前の準備：PCだけのフォルダ（pc-images の名前の一覧と、4-3 の回想のイラスト）" }),
+      pcFilesTool(),
       el("h4", { text: "答えを暗号にする（駅名など、ページに書きたくない答え用）" }),
       secretTool(),
       el("h4", { text: "表示用に隠す（駅名・公園名を、画面には出したいとき用）" }),
@@ -4613,11 +4976,20 @@
   });
   chat.log.addEventListener("click", () => { if (CV.skip) CV.skip(); });
   document.addEventListener("keydown", (e) => {
+    const tag = (e.target && e.target.tagName ? e.target.tagName : "").toLowerCase();
+    // はじめの演出（1-1）のあいだは、Enter・スペースで飛ばす。ほかのキーは使わない
+    //   （「はじめから」のボタンが選ばれていても、もう一度押されないようにする）
+    if (intro && !["input", "textarea", "select"].includes(tag)) {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        if (!e.repeat) intro.skip();
+      }
+      return;
+    }
     if (overlay.classList.contains("open")) {
       if (e.key === "Escape") closeOverlay();
       return;
     }
-    const tag = (e.target && e.target.tagName ? e.target.tagName : "").toLowerCase();
     // 氷の床・歩けるマップ：矢印キー（または W A S D）で動く。歩けるマップでは Enter・スペースで調べる
     // （テスト用メニューなどの入力欄に文字を打っているときは、動かない）
     if (currentView === "novel" && GRID.key && !["input", "textarea", "select"].includes(tag) && GRID.key(e)) {
@@ -4640,6 +5012,8 @@
   // ==============================================================
   const problems = validate();
   updateParty();
+  // 名前の確認（1-1）の一覧は、先に読みこみはじめておく（PCで直接開いたときだけ。ないときは確認しない）
+  if (ART_DIR && Object.values(SCN).some((sc) => sc && sc.input && sc.input.check)) loadNames();
   showProblems(problems.errors);
   if (DEBUG) setupDebug(problems);
   if (!handleUrlKey()) showTitle();

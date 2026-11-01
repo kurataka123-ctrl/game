@@ -326,6 +326,36 @@ button { font: inherit; color: inherit; touch-action: manipulation; }
     0 0 0 2px rgba(255, 248, 225, .8), 0 0 14px 4px rgba(255, 232, 160, .55);
 }
 
+/* 行の絵（data.js の行の image。4-3 の回想のイラスト。PCで直接開いたときだけ）
+   ゲーム画面の部分（会話の枠より上）いっぱいに、切り取らずに全体を収める。余白は暗い色（--picture-bg） */
+.stage { --picture-bg: #000; }
+.stage-picture {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  background: var(--picture-bg);
+}
+.stage-picture-img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;   /* 切り取らない（右下のロゴと著作権表示も見える） */
+  user-select: none;
+  -webkit-user-select: none;
+}
+.stage.picture-mode .chars { visibility: hidden; }   /* 絵のあいだは、キャラクターの並びを隠す（動きはそのまま） */
+.novel.picture-mode .textbox { box-shadow: none; }    /* 会話の枠の上向きの影で、絵の下の端（右下のロゴなど）を暗くしない */
+/* 絵を出す・消すときの暗転（ゲーム画面の部分だけ。長さは engine.js が場面の imageFade から決める） */
+.stage-shade {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  background: #000;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0ms linear;
+}
+
 /* 選択肢・入力欄が出ている間は、キャラクターを上によせて小さくする */
 .stage.has-layer .chars { align-items: flex-start; padding-top: 3cqh; }
 .stage.has-layer .char-face {
@@ -1717,6 +1747,19 @@ button { font: inherit; color: inherit; touch-action: manipulation; }
 .end-text { margin: 0 0 20px; white-space: pre-wrap; line-height: 1.9; color: #4a4450; }
 .end-buttons { display: flex; flex-direction: column; gap: 10px; align-items: center; }
 .end-buttons .btn { width: min(320px, 100%); }
+
+/* ---------------- はじめの演出（1-1。data.js の場面の intro） ----------------
+   画面を暗くする幕。濃さと時間は engine.js が決める。演出のあいだだけ、クリックを受けとる（飛ばすため） */
+.veil {
+  position: absolute;
+  inset: 0;
+  z-index: 80;
+  background: #000;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0ms linear;
+}
+.veil.on { pointer-events: auto; cursor: pointer; }
 
 /* ---------------- 重ねて表示する画面 ---------------- */
 .overlay {

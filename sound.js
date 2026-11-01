@@ -587,7 +587,8 @@
   }
 
   // 曲の音量を、to（0〜1。SETTINGS の音量に対する割合）まで、短くフェードして変える。0 になったら一時停止
-  function fadeTo(name, p, to) {
+  //   ms：フェードの長さ（ミリ秒。書かなければ FADE_MS。1-1 のはじめの演出では、森のマップが現れる時間）
+  function fadeTo(name, p, to, ms) {
     if (!p || !p.audio || p.failed) return;
     if (p.target === to && (p.fade || (to > 0 ? !p.audio.paused && !p.blocked : p.audio.paused))) return;
     p.target = to;
@@ -615,8 +616,9 @@
     }
     const from = p.level;
     const t0 = Date.now();
+    const len = Number(ms) > 0 ? Number(ms) : FADE_MS;
     const step = () => {
-      const k = Math.min(1, (Date.now() - t0) / FADE_MS);
+      const k = Math.min(1, (Date.now() - t0) / len);
       p.level = from + (to - from) * k;
       try { p.audio.volume = Math.max(0, Math.min(1, p.level * trackVolume(name))); } catch (e) { /* 何もしない */ }
       if (k < 1) return;
@@ -630,11 +632,12 @@
   }
 
   // いま鳴らす曲に合わせる（ほかの曲はフェードして止め、鳴らす曲はフェードして始める）
-  function syncBgm() {
+  //   ms：鳴らす曲を始めるときのフェードの長さ（ミリ秒。書かなければ FADE_MS）
+  function syncBgm(ms) {
     const name = bgmTry || bgmWant;
     const allowed = Boolean(name) && (bgmTry ? true : on) && !document.hidden;
     for (const [n, p] of Object.entries(players)) if (!allowed || n !== name) fadeTo(n, p, 0);
-    if (allowed) fadeTo(name, player(name), 1);
+    if (allowed) fadeTo(name, player(name), 1, ms);
   }
   // 自動で鳴らせなかった曲を、画面にさわったときに、もう一度鳴らす
   function retryBgm() {
@@ -741,9 +744,25 @@
 
     // 場面の曲（BGM）を決める（null で止める）。同じ曲が続く場面では、鳴らしたまま
     //   engine.js は、PCの場面のときだけ曲を頼む（iPhone の場面・第3部・タイトルでは null）
-    bgm(name) {
+    //   fade：曲を始めるときのフェードの長さ（ミリ秒）。書かなければ、短いフェード（FADE_MS）
+    //         （1-1 のはじめの演出で、森のマップが現れるのに合わせて、小さい音から始めるため）
+    bgm(name, fade) {
       bgmWant = name && tracks[name] ? name : null;
-      syncBgm();
+      syncBgm(fade);
+    },
+
+    // 曲を、音を出さずに準備する（画面をクリックした、その処理の中で呼ぶ）
+    //   1-1 のはじめの演出では、「はじめから」を押してから2秒後に曲を始める。ブラウザによっては
+    //   （推測：Mac の Safari など）、クリックの処理の中で一度 play() した曲でないと、あとから鳴らせないため
+    primeBgm(name) {
+      if (!on || !tracks[name]) return;
+      const p = player(name);
+      if (!p || !p.audio || p.failed || !p.audio.paused) return;
+      try {
+        const r = p.audio.play();   // 音量は 0 のまま。すぐに止める
+        p.audio.pause();
+        if (r && typeof r.catch === "function") r.catch(() => { /* 止めたので、中断の知らせが来る（問題ない） */ });
+      } catch (e) { /* 準備できなくても、ゲームは進む */ }
     },
 
     has: (name) => Boolean(SOUNDS[name]),
