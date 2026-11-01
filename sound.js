@@ -165,6 +165,77 @@
       },
     },
 
+    // ---- 文字送り（全体。PCの場面で、文字が1文字ずつ出るときの短い音） ----
+    //   engine.js が、文字を2文字出すごとに1回鳴らす（空白・「、」「。」「…」などでは鳴らさない）
+    text: {
+      label: "文字送りの短い音", len: 0.06,
+      make(c, out, t) {
+        tone(c, out, t, { freq: 1046.5, dur: 0.035, gain: 0.032, attack: 0.002 });
+        tone(c, out, t, { type: "triangle", freq: 523.3, dur: 0.03, gain: 0.018, attack: 0.002 });
+      },
+    },
+
+    // ---- 1-2 氷の床 ----
+    //   o.len：すべる長さ（秒）。engine.js が、すべるマスの数に合わせて渡す
+    slide: {
+      label: "氷の床をすべる", len: 0.5,
+      make(c, out, t, o) {
+        const d = Math.max(0.12, Math.min(1.2, Number(o && o.len) || 0.4));
+        noise(c, out, t, { freq: 4600, to: 2600, glide: d, dur: d + 0.08, gain: 0.08, attack: 0.03, hold: Math.max(0, d - 0.1), q: 0.9 });
+        noise(c, out, t, { filter: "highpass", freq: 7000, dur: d * 0.6 + 0.05, gain: 0.012, attack: 0.02 });   // 氷のきしみ
+      },
+    },
+    bump: {
+      label: "氷の床で岩にぶつかる", len: 0.25,
+      make(c, out, t) {
+        tone(c, out, t, { type: "triangle", freq: 330, to: 150, dur: 0.12, gain: 0.15, attack: 0.002 });
+        noise(c, out, t, { filter: "lowpass", freq: 1200, dur: 0.06, gain: 0.06, attack: 0.001 });
+        tone(c, out, t + 0.01, { freq: 2637, dur: 0.07, gain: 0.025, attack: 0.001 });   // 氷が小さく鳴る
+      },
+    },
+    record: {
+      label: "挑戦の床の「最短記録」", len: 1.4,
+      make(c, out, t) {
+        [1046.5, 1318.5, 1568, 2093].forEach((f, i) => bell(c, out, t + i * 0.085, f, i === 3 ? 0.8 : 0.4, 0.12));
+        [3136, 3951, 4186].forEach((f, i) => tone(c, out, t + 0.38 + i * 0.07, { freq: f, dur: 0.3, gain: 0.03, attack: 0.002 }));
+        pad(c, out, t + 0.3, [523.3, 659.3, 784], { dur: 1.05, gain: 0.035, attack: 0.1, hold: 0.2 });
+      },
+    },
+
+    // ---- 2-1 暗い部屋：ブラッキーの声がとぎれる所のノイズ ----
+    static: {
+      label: "声がとぎれるノイズ（2-1）", len: 1.5,
+      make(c, out, t) {
+        // ザザッ……と、とぎれとぎれに鳴って、最後はぷつりと切れる
+        [[0, 0.22, 1800], [0.27, 0.16, 2600], [0.47, 0.05, 1400], [0.56, 0.3, 2100], [0.92, 0.08, 3000], [1.06, 0.26, 1700]]
+          .forEach(([dt, d, f], i) => noise(c, out, t + dt, { freq: f, dur: d, gain: i === 5 ? 0.05 : 0.075, attack: 0.004, hold: d * 0.6, q: 0.6 }));
+        [0.02, 0.15, 0.3, 0.6, 0.71, 0.95, 1.1].forEach((dt) =>
+          noise(c, out, t + dt, { filter: "highpass", freq: 3000, dur: 0.012, gain: 0.08, attack: 0.001 }));   // パチッ
+        const hum = c.createBiquadFilter();       // 遠くの低いうなり（声が遠ざかる）
+        hum.type = "lowpass";
+        hum.frequency.value = 500;
+        hum.connect(out);
+        tone(c, hum, t, { type: "sawtooth", freq: 110, to: 82, glide: 1.3, dur: 1.32, gain: 0.03, attack: 0.08, hold: 1.1 });
+      },
+    },
+
+    // ---- 2-4 ブラッキーの窓（iPhone。短い通知音） ----
+    connect: {
+      label: "つながる音（2-4）", len: 0.7, short: true,
+      make(c, out, t) {
+        tone(c, out, t, { freq: 440, to: 880, glide: 0.16, dur: 0.18, gain: 0.07, attack: 0.02 });
+        bell(c, out, t + 0.17, 1318.5, 0.32, 0.11);
+        bell(c, out, t + 0.27, 1975.5, 0.42, 0.09);
+      },
+    },
+    join: {
+      label: "イーブイが会話に入る通知音（2-4）", len: 0.55, short: true,
+      make(c, out, t) {
+        pluck(c, out, t, 987.8, 0.22, 0.12);
+        pluck(c, out, t + 0.1, 1318.5, 0.38, 0.12);
+      },
+    },
+
     // ---- 1-3 戦闘：友達3人の技 ----
     pingpong: {
       label: "ピンポンアタック（2回当たる）", len: 0.45,
@@ -608,7 +679,8 @@
 
     // 音を1回鳴らす（鳴らせないとき・鳴らさない場面では、何もしない）
     //   force：テスト用メニューの試聴（ON/OFF と場面の決まりを無視する）
-    play(name, force) {
+    //   opts：音に渡す値（氷の床の slide の len〔すべる長さ・秒〕など）
+    play(name, force, opts) {
       const s = SOUNDS[name];
       if (!s || s.loop) return false;
       if (force) unlock(true);
@@ -618,7 +690,7 @@
       if (last[name] != null && now - last[name] < 0.05) return false;
       last[name] = now;
       try {
-        s.make(ctx, bus.input, now + 0.01);
+        s.make(ctx, bus.input, now + 0.01, opts || {});
         return true;
       } catch (e) {
         return false;
@@ -728,7 +800,7 @@
       const c = new OAC(1, Math.ceil(rate * (seconds || s.len + 0.4)), rate);
       const out = raw ? c.destination : makeBus(c).input;
       if (s.loop) s.start(c, out);
-      else s.make(c, out, 0.01);
+      else s.make(c, out, 0.01, {});
       return c.startRendering();
     },
   };

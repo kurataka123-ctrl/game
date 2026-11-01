@@ -436,11 +436,17 @@
     return { root, chapter, partyBtn, chars, roomBox, gridBox, puzzleBox, battleBox, houseBox, layer, draft, stage, name, text, mark, box };
   }
 
+  // 文字送りの短い音を鳴らさない文字（空白・句読点・「…」・かっこなど）
+  const QUIET_CHAR = /[\s　、。，．,.・…‥！？!?「」『』（）()［］【】ー―〜~：:]/;
+
   // 文字を1文字ずつ表示する
-  function typeInto(node, text, done) {
+  //   blip：文字送りの短い音の名前（data.js の SETTINGS.textSound）。2文字出すごとに1回鳴らす。
+  //         行に自分の音（sound）があるときは、その音が聞こえるように、呼ぶ側が渡さない
+  function typeInto(node, text, done, blip) {
     const chars = Array.from(text);
     const speed = Number(S.textSpeed) || 0;
     let i = 0;
+    let said = 0;   // 音を数えた文字の数
     let timer = null;
     let finished = false;
     const finish = () => {
@@ -458,6 +464,7 @@
     timer = setInterval(() => {
       i += 1;
       node.textContent = chars.slice(0, i).join("");
+      if (blip && !QUIET_CHAR.test(chars[i - 1]) && said++ % 2 === 0) SND.play(blip);
       if (i >= chars.length) finish();
     }, speed);
     return { skip: finish, cancel() { finished = true; clearInterval(timer); } };
@@ -586,6 +593,7 @@
     if (NV.onLine) NV.onLine(i);
     novel.mark.hidden = true;
     if (NV.typer) NV.typer.cancel();
+    const blip = ln.sound ? null : S.textSound;   // 行に自分の音があるときは、文字送りの音を鳴らさない
     const handle = typeInto(novel.text, ln.text, () => {
       doneNow = true;
       NV.typer = null;
@@ -600,7 +608,7 @@
           }, NV.auto);
         }
       }
-    });
+    }, blip);
     if (!doneNow) NV.typer = handle;
   }
 
@@ -837,7 +845,7 @@
         const handle = typeInto(novel.text, fill(said), () => {
           doneNow = true;
           NV.typer = null;
-        });
+        }, S.textSound);
         if (!doneNow) NV.typer = handle;
         if (item.shine) found = true;
         if (found) showDone();
@@ -901,21 +909,30 @@
         void view.face.offsetWidth;
         view.face.classList.add("bump");
       };
+      // 氷の床の音（data.js の SETTINGS.iceSound の slide・bump）
+      const iceSound = (kind, opts) => {
+        const name = S.iceSound && S.iceSound[kind];
+        if (name) SND.play(name, false, opts);
+      };
       const move = (dir) => {
         if (busy || done || token !== gen) return;
         const r = iceSlide(ice, pos.x, pos.y, dir);
-        if (!r.steps && !r.goal) { bump(); return; }
+        if (!r.steps && !r.goal) { bump(); iceSound("bump"); return; }
         moves += 1;
         busy = true;
         const ms = r.steps * 90;
         view.place(r.x, r.y, ms);
         pos = { x: r.x, y: r.y };
         status();
+        if (r.steps) iceSound("slide", { len: ms / 1000 });   // すべる長さに合わせて鳴らす
         setTimeout(() => {
           busy = false;
-          if (token !== gen || !r.goal) return;
+          if (token !== gen) return;
+          if (!r.goal) { iceSound("bump"); return; }          // 岩か壁にぶつかって止まった
           finish();
           view.board.classList.add("cleared");
+          // 最短でクリアしたら「最短記録」の音（ice の recordSound。挑戦の床だけに書いてある）
+          if (moves <= best && spec.recordSound) SND.play(spec.recordSound);
           novel.text.textContent = moves <= best
             ? T("iceBest", { n: moves })
             : T("iceClear", { n: moves, best });
@@ -3722,6 +3739,7 @@
         }
         if (!sc.next) errors.push(`${at} の ice には、next（クリアしたあとの行き先）が必要です。`);
         if (sc.ice.skip) check(sc.ice.skip.next, `${at} の ice の skip`);
+        checkSound(sc.ice.recordSound, `${at} の ice の recordSound`, false);
         checkLines(sc.ice.clear, `${at} の ice の clear`);
         if (sc.mode === "chat") warnings.push(`${at}：メッセージ形式（chat）では、氷の床のパズルを表示できません。`);
       }
@@ -3852,6 +3870,9 @@
     }
     // 入力欄（全体）の正解音・不正解音
     for (const kind of ["correct", "wrong"]) if (S.inputSound && S.inputSound[kind]) checkSound(S.inputSound[kind], `SETTINGS の inputSound の ${kind}`, false);
+    // 文字送りの短い音・氷の床の音
+    checkSound(S.textSound, "SETTINGS の textSound", false);
+    for (const kind of ["slide", "bump"]) if (S.iceSound && S.iceSound[kind]) checkSound(S.iceSound[kind], `SETTINGS の iceSound の ${kind}`, false);
     // 曲（BGM）のファイルと音量
     for (const [name, t] of Object.entries(S.bgm || {})) {
       const at = `SETTINGS の bgm の「${name}」`;
