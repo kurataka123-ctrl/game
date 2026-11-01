@@ -3030,9 +3030,9 @@
     SND.bgm(sceneBgm(sc));
     const view = sc.mode === "chat" ? ChatView : NovelView;
     view.enter(sc);
-    // 選択肢・入力がある場面は、最後の行のあとすぐに表示する
+    // 選択肢・入力・クイズがある場面は、最後の行のあとすぐに表示する
     // （地図を調べる・歩く・氷の床の場面は、最後の行を読み終えてから始める）
-    const waitsForPlayer = Boolean(hasChoices(sc) || sc.input);
+    const waitsForPlayer = Boolean(hasChoices(sc) || sc.input || sc.quiz);
     view.say(skipLines ? [] : sc.lines, () => afterLines(sc, view), !waitsForPlayer);
   }
 
@@ -3066,7 +3066,88 @@
       view.explore(sc, next);
       return;
     }
+    // おまけクイズ：終わったら、言葉（give）を受けとってから、そのまま next の場面へ（「つづける」のボタンは出さない）
+    if (sc.quiz) {
+      runQuiz(sc, view, () => giveWord(sc, view, () => (sc.next ? runScene(sc.next) : leave(sc, view))));
+      return;
+    }
     next();
+  }
+
+  // ---- おまけクイズ（場面の quiz。3-1 サンダース） ----
+  //   1問ずつ、選択肢を出す。正解でも不正解でも解説を出して、次の問題へ進む（ヒント・答え直しはない）
+  //   最後に「○問中○問正解だ！」と、正解数に合ったセリフを出す
+  //   "~" で始まる文字は「表示用に隠す」形（unhide で元にもどす）
+  // 解説の頭の「答えは○○だ！」（正解したときは、ここを省いて補足にする）
+  const QUIZ_HEAD = /^((?:[^：:「」\n]{1,12}[：:])?)答えは[^！!\n]*[！!][\s　]*/;
+  // クイズの文の1行：名前のない文は、quiz の who のセリフにする。vars は {n} {total} の置きかえ
+  function quizLine(qz, ln, vars) {
+    const obj = ln && typeof ln === "object" ? ln : { text: ln };
+    let text = unhide(obj.text);
+    if (vars) text = text.replace(/\{(\w+)\}/g, (whole, k) => (k in vars ? String(vars[k]) : whole));
+    const line = { ...obj, text };
+    if (!obj.who && !parseLine(text).who && qz.who) line.who = qz.who;
+    return line;
+  }
+  const quizLines = (qz, lines, vars) => toArray(lines)
+    .filter((ln) => ln != null && unhide(ln && typeof ln === "object" ? ln.text : ln) !== "")
+    .map((ln) => quizLine(qz, ln, vars));
+  // 出す問題（if・unless の条件に合うもの）
+  const quizQuestions = (qz, on = flagOn) => toArray(qz.questions).filter((q) => visibleWith(q, on));
+  // 正解数のセリフ（出した問題の数 total ごとの範囲 count から選ぶ）
+  function quizResult(qz, total, n) {
+    return toArray(qz.results).find((r) => {
+      const range = r && r.count && r.count[total];
+      return Array.isArray(range) && n >= Number(range[0]) && n <= Number(range[1]);
+    });
+  }
+  // 正解したときの補足（plus。なければ、explain の頭の「答えは○○だ！」を省いた残り）
+  function quizPlus(q) {
+    if (q.plus != null) return toArray(q.plus);
+    return toArray(q.explain).map((ln, i) => {
+      if (i > 0) return ln;
+      const obj = ln && typeof ln === "object" ? ln : { text: ln };
+      return { ...obj, text: unhide(obj.text).replace(QUIZ_HEAD, "$1") };
+    });
+  }
+
+  function runQuiz(sc, view, then) {
+    const qz = sc.quiz;
+    const qs = quizQuestions(qz);
+    const total = qs.length;
+    const token = gen;
+    const praise = toArray(qz.correct);
+    let score = 0;
+    const ask = (i) => {
+      if (token !== gen) return;
+      if (i >= total) {
+        const result = quizResult(qz, total, score);
+        view.say(quizLines(qz, [qz.score, result && result.text], { n: score, total }), then, true);
+        return;
+      }
+      const q = qs[i];
+      const list = toArray(q.choices).map((c, k) => {
+        const obj = c && typeof c === "object" ? c : { text: c };
+        return { text: unhide(obj.text), reply: obj.reply, index: k + 1 };
+      });
+      view.say(quizLines(qz, [...toArray(q.before), ...toArray(q.ask)]), () => {
+        if (token !== gen) return;
+        view.choices(list, (c) => {
+          const ok = c.index === Number(q.answer);
+          let lines;
+          if (ok) {
+            inputSound("correct");
+            lines = [praise.length ? praise[score % praise.length] : null, ...quizPlus(q)];
+            score += 1;
+          } else {
+            inputSound("wrong");
+            lines = [...(c.reply != null ? toArray(c.reply) : toArray(qz.wrong)), ...toArray(q.explain)];
+          }
+          view.say(quizLines(qz, [...lines, ...toArray(q.after)]), () => ask(i + 1), false);
+        });
+      }, false);
+    };
+    ask(0);
   }
 
   // set: "indoor" → 条件の名前を記録する / unset: "indoor" → 消す（場面にも選択肢にも書ける）
@@ -3722,6 +3803,7 @@
           checkLines(inp.skip.reply, `${at} の skip の reply`);
         }
       }
+      if (sc.quiz) checkQuiz(sc, at, errors, warnings, checkLines, checkText);
       if (sc.ice) {
         const raw = parseIce(sc.ice);
         const wm = sc.walk ? lookMap(sc.walk, "nature") : null;
@@ -3957,6 +4039,86 @@
         if (pts[a].id === pts[b].id) continue;
         const d = GEO.distance(pts[a].pt.lat, pts[a].pt.lon, pts[b].pt.lat, pts[b].pt.lon);
         if (d < 2 * g.radius) warnings.push(`SETTINGS の gps の parks：${pts[a].label}と${pts[b].label}の点が ${Math.round(d)} m しか離れておらず、判定の範囲（半径 ${g.radius} m）が重なります。`);
+      }
+    }
+  }
+
+  // おまけクイズ（場面の quiz）の点検
+  //   正解の番号・選択肢の数・「表示用に隠す」文字が読めるか・正解数のセリフが、どの正解数にも1つずつあるか
+  function checkQuiz(sc, at, errors, warnings, checkLines, checkText) {
+    const qz = sc.quiz;
+    const where = `${at} の quiz`;
+    if (!qz || typeof qz !== "object" || !toArray(qz.questions).length) {
+      errors.push(`${where}：questions（問題）を [ ] で書いてください。`);
+      return;
+    }
+    if (!sc.next) errors.push(`${where}：クイズのあとに進む next が必要です。`);
+    if (hasChoices(sc) || sc.input || sc.end || sc.battle || sc.walk || sc.ice || sc.room || sc.knock != null) {
+      errors.push(`${where}：クイズの場面では、choices・input・end・battle・walk・ice・room・knock は使えません。`);
+    }
+    if (qz.who && !CHARS[qz.who]) errors.push(`${where} の who：「${qz.who}」というキャラクターがいません。`);
+    if (!toArray(qz.correct).length) warnings.push(`${where}：correct（正解のセリフ）がありません。`);
+    // "~" の文字が読めるか（読めれば、元の文で { } と話し手を点検する）
+    const plain = (t, w) => {
+      const s = String(t == null ? "" : t);
+      if (s.startsWith("~") && !unhide(s)) {
+        errors.push(`${w}：「表示用に隠す」文字が読めません（🛠 →「表示用に隠す」で作り直してください）。`);
+        return "";
+      }
+      return unhide(s);
+    };
+    const lines = (list, w, allow) => {
+      const ok = toArray(list).map((ln) => {
+        const obj = ln && typeof ln === "object" ? ln : { text: ln };
+        return { ...obj, text: plain(obj.text, w) };
+      });
+      checkLines(ok, w, allow);
+    };
+    lines(qz.correct, `${where} の correct`);
+    lines(qz.wrong, `${where} の wrong`);
+    lines(qz.score, `${where} の score`, ["n", "total"]);
+    toArray(qz.questions).forEach((q, i) => {
+      const w = `${where} の${i + 1}問目`;
+      if (!q || typeof q !== "object") {
+        errors.push(`${w} の書き方がおかしいようです。`);
+        return;
+      }
+      if (!toArray(q.ask).length) errors.push(`${w}：ask（問題）がありません。`);
+      const choices = toArray(q.choices);
+      if (choices.length < 2) errors.push(`${w}：choices（選択肢）を2つ以上書いてください。`);
+      const n = Number(q.answer);
+      if (!Number.isInteger(n) || n < 1 || n > choices.length) errors.push(`${w}：answer（正解は何番目か）は、1 から ${choices.length} までの数にしてください。`);
+      if (!toArray(q.explain).length) errors.push(`${w}：explain（解説）がありません。`);
+      lines(q.before, `${w} の before`);
+      lines(q.ask, `${w} の ask`);
+      lines(q.explain, `${w} の explain`);
+      lines(q.plus, `${w} の plus`);
+      lines(q.after, `${w} の after`);
+      choices.forEach((c, k) => {
+        const obj = c && typeof c === "object" ? c : { text: c };
+        const text = plain(obj.text, `${w} の選択肢${k + 1}`);
+        if (!text) errors.push(`${w} の選択肢${k + 1}に、文字がありません。`);
+        checkText(text, `${w} の選択肢${k + 1}`);
+        lines(obj.reply, `${w} の選択肢${k + 1}の reply`);
+        if (obj.reply != null && k + 1 === n) warnings.push(`${w} の選択肢${k + 1}：正解の選択肢の reply は使われません（正解のときは correct と補足）。`);
+      });
+    });
+    // 正解数のセリフ：条件（if・unless）の組み合わせごとに、出る問題の数を数えて、0問〜全問に1つずつあるか
+    const names = [...new Set(toArray(qz.questions).flatMap((q) => [...toArray(q && q.if), ...toArray(q && q.unless)]))];
+    const totals = new Set();
+    for (let mask = 0; mask < 1 << names.length; mask += 1) {
+      const on = (name) => Boolean(mask & (1 << names.indexOf(name)));
+      totals.add(quizQuestions(qz, on).length);
+    }
+    toArray(qz.results).forEach((r, k) => lines(r && r.text, `${where} の results の${k + 1}つ目`));
+    for (const total of totals) {
+      for (let n = 0; n <= total; n += 1) {
+        const hits = toArray(qz.results).filter((r) => {
+          const range = r && r.count && r.count[total];
+          return Array.isArray(range) && n >= Number(range[0]) && n <= Number(range[1]);
+        });
+        if (!hits.length) errors.push(`${where} の results：${total}問中${n}問正解のときのセリフがありません。`);
+        else if (hits.length > 1) warnings.push(`${where} の results：${total}問中${n}問正解のときのセリフが、${hits.length}つあります（上のものを使います）。`);
       }
     }
   }
@@ -4261,7 +4423,7 @@
     const out = el("code", { class: "debug-out", text: "" });
     field.addEventListener("input", () => {
       const v = field.value.trim();
-      out.textContent = v ? `"${hide(v)}",　← hidden に貼りつける` : "";
+      out.textContent = v ? `"${hide(v)}",　← hidden（または3-1のクイズ）に貼りつける` : "";
     });
     return el("div", { class: "debug-kw" },
       field, out,

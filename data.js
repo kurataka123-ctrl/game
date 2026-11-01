@@ -27,6 +27,8 @@
 //    next    : 会話が終わったら進む場面の名前
 //    choices : 選択肢（next がない選択肢は、reply を表示してから選び直し）
 //    input   : 文字を入力させる（なぞなぞ・カードの言葉・名前など）
+//    quiz    : おまけクイズ（3-1 サンダース）。会話のあとに1問ずつ出し、正解数のセリフのあと next へ
+//              （書き方は jolteon_meet の場面と README の「おまけクイズ」を参照）
 //    end     : 章の終わりの画面を出す
 //    mode    : "chat" にするとメッセージアプリ風（iPhone向け）の表示
 //    bg      : 背景（forest / ice / memory / night / dream / home /
@@ -1361,6 +1363,9 @@ const SCENES = {
   },
 
   // ---- 3-1 サンダース（駅） ----
+  //  自己紹介のあとに、駅と電車のおまけクイズ（quiz）を出す。書き方は、下の quiz の説明と README の「おまけクイズ」
+  //  外へ出た日は10問（Q1〜Q10）、家の中で進める日（indoor）は5問（Q6〜Q10）。
+  //  正解しなくても進む。ヒントも答え直しもない。正解でも不正解でも、解説を出す。
   jolteon_meet: {
     mute: true,   // 第3部（外）では音を鳴らさない
     mode: "chat",
@@ -1372,18 +1377,131 @@ const SCENES = {
       { if: "indoor", text: "サンダース：おっそーい！　待ちきれなくて、窓の外まで走ってきちゃったよ！" },
       { if: "indoor", text: "サンダース：姿は見せられないけど、窓ごしなら話せるぜ！" },
       "サンダース：オレはサンダース。電車って電気で走るんだぜ。オレと気が合いそうだろ？",
-      { unless: "indoor", text: "サンダース：オレに会いに来たなら、速さの勝負だ。問題！" },
-      { if: "indoor", text: "サンダース：せっかく来たんだ。速さの勝負だ。問題！" },
-      "サンダース：雷がピカッと光ってから、ゴロゴロが聞こえるまで3秒。",
-      "サンダース：雷までは、だいたいどれくらい？",
+      { unless: "indoor", text: "サンダース：3周もすると、いろいろ気づくんだよな。よし、問題だ！" },
+      { if: "indoor", text: "サンダース：窓の外を走りながら、電車のことを考えてたんだ。よし、問題だ！" },
     ],
-    // まちがえたら、ヒント（音の速さ）を出して選び直させる
-    choices: [
-      { text: "約100m", reply: ["サンダース：それなら0.3秒くらいで聞こえるはずだ！", "サンダース：音は1秒で、だいたい340メートル進む。3秒なら、340に3をかければいい。"] },
-      { text: "約1km", reply: "サンダース：正解！　340×3で、だいたい1,000メートル。", next: "jolteon_word" },
-      { text: "約10km", reply: ["サンダース：それだと30秒くらいかかる計算だぜ！", "サンダース：音は1秒で、だいたい340メートル進む。3秒なら、340に3をかければいい。"] },
-      { text: "光ってすぐだから0m", reply: ["サンダース：光が速すぎて、音が置いていかれてるんだよ！", "サンダース：音は1秒で、だいたい340メートル進む。3秒なら、340に3をかければいい。"] },
-    ],
+
+    // ---- おまけクイズ（駅・電車） ----
+    //  クイズの文は、名前を書かなければ who のセリフになる（「サンダース：」を書かなくてよい）。
+    //  1問ずつ：before（問題の前のセリフ）→ ask（問題）→ 選択肢 → 正解・不正解のセリフと解説 → after
+    //    正解のとき  ：correct のセリフ（上から順に使い、最後の次は最初にもどる）＋ 補足
+    //                  補足は plus。plus がなければ、explain の頭の「答えは○○だ！」を省いた残り
+    //                  （explain が「答えは」で始まらなければ、explain をそのまま出す）
+    //    不正解のとき：wrong（選んだ選択肢に reply があれば、その reply）＋ explain
+    //  answer：正解は何番目か（1から数える）。選択肢は書いた順に表示する（入れ替えない）
+    //  unless: "indoor" の問題は、家の中で進める日には出さない（出す問題の数で「○問中」が決まる）
+    //  "~" で始まる文字は「表示用に隠す」形（駅に固有の答えを、公開ページに平文で載せないため）。
+    //    直すときは ?debug →🛠→「表示用に隠す」に、元の文（「サンダース：」なし）を入れて作り直す（README 4章）
+    //  Q1〜Q5 は、問題文に駅名を書かない（「この駅」）。
+    quiz: {
+      who: "jolteon",
+      correct: ["やるじゃん！", "正解！　よく見てるな。", "さすがだぜ！"],
+      wrong: "おしい！",
+      questions: [
+        // ---- 現地の問題（外へ出た日だけ。改札の外から見えるもの） ----
+        // Q1 階段の段数【要確認：たかさんが現地で数える。選択肢・answer・explain・plus を直す】
+        {
+          unless: "indoor",
+          before: "見に行くときは、スマホはポケットにな。",
+          ask: "~huTlhuSDjdXgguzLhvXIhq7YkefejubPlebZyO3/huDGhuT0huemjejrh8PQhvbngZDxlMvUjuTnlefuwtjt",
+          choices: ["~VFSQy9A=", "~VFaQy9A=", "~VFCQy9A="],
+          answer: 1,
+          explain: "~gsjihuSlh/PKUFyDy8OG5I2LzuSC7eWD49WGrOyR5MuO5OmV5+zJ3PiG4+aG5N6G5ayM1O6J/diG982GrPOR5MqO5OqV5OHO5e6G4e8=",
+          plus: "~huTXhueuh/D2guzNg+PVhqzskeT+juTPmdnk",
+        },
+        // Q2 駅の看板の駅ナンバー
+        //   【要確認：改札の外から見えるか。選択肢の2つ（ちがう番号）が正しいか。直すときは choices・explain】
+        {
+          unless: "indoor",
+          ask: "~jMLzhuSDg+7uh/DahvfOg7bckeTljuTDleTnzub5jMbohub8huaeh/H1gu7ZhvfKipH7",
+          choices: ["~LjZDXA==", "~LjZAVQ==", "~LjZAVA=="],
+          answer: 3,
+          explain: "~gsjihuSlh/PKKj5TVJXkxcLY84bh7S42leTKyd7eg+n9huTYhuS6h/DuguzyhvbnjIrhl/XsjuTpns/IzubzhuDHhuT5huSLh/Dngu3kguPPgKLTkeTGiO3jleTuzub5huP+huTWhuSxh/Ln",
+        },
+        // Q3 1日平均の乗降人員（2025年度。出典：京成電鉄「駅別乗降人員」）【要確認：数値を直すときは choices・explain】
+        {
+          unless: "indoor",
+          ask: "~huTlhuSDjdXgguzLVJDywMjdwYD86obk2IHcuo3r6IXX34DlxIqR7EBVU1iA3MKA34uLzuyC7MqG9uSCmeCW2PSJ39+Z2fo=",
+          choices: ["~gtHyV0kYVEKB29c=", "~gtHyUUkdVEKB29c=", "~gtHyUEkYVEKB29c="],
+          answer: 3,
+          explain: "~gsjihuSlh/PKhtnhUFpQVR2AyN+O0eSG9uWDgMeVx9uO5M6V5MoYSERWWInf35Xl58jU44bg+obk7IbkiYHQ8oTnxYb38oaswpHk5Y7n7pXn9s7l0obg8Ybl9A==",
+        },
+        // Q4 改札の前の自動販売機の台数【要確認：遊ぶ日の直前に数える。直すときは choices・answer・explain】
+        {
+          unless: "indoor",
+          ask: "~g/HPg/mAh/PLhOTohvfOhqzmkefqheLPk+7wxdbbgMLfg8zphuSCgM/whOLVisr6",
+          choices: ["~VoD51Q==", "~UYD51Q==", "~UID51Q=="],
+          answer: 2,
+          explain: "~gsjihuSlh/PKVYjq1ZXkxcLY84bh7Ybk5Ybkq4fz4YLs44LC1Yas75Hk5Y7kzZXk9s7m/4bgxoPV4YbkiIfz6oLsy4b054at5ZvC5I7n95DA2M7l5Ybj7YbnxYbmqYfzxYLs+Yb25w==",
+        },
+        // Q5 運賃表の一番高い運賃【要確認：遊ぶ日の直前に確かめる。直すときは choices・answer・explain】
+        {
+          unless: "indoor",
+          ask: "~jOT9jdaujNPNguzChvbkgZXklfDLhM79leThxOX5jdLuhuTZhuSph/Pqgu/sisr6",
+          choices: ["~VElEUFXI4vQ=", "~VElCUlXI4vQ=", "~VElDXFXI4vQ="],
+          answer: 2,
+          explain: "~gsjihuSlh/PKUEFRUkaA46uH88WO0eSG9uWGrM2R5PKO5NuV5MLFxf6G4PyG5/2G5IOH8+6C7eSM9+6NnueaxMmO5/eew+7O5vmG4MOG5/SM+I+D69iC7OGG9O2GrM6R5eM=",
+        },
+
+        // ---- 電車の問題（家の中で進める日も出す） ----
+        // Q6
+        {
+          before: { unless: "indoor", text: "ここからは電車の問題だ！" },
+          ask: "パンタグラフで架線から取り込んだ電気。モーターを回したあと、どこを通って戻る？",
+          choices: ["架線", "空気中", "レール"],
+          answer: 3,
+          explain: "電気は行きと帰りで一つの回路。帰り道はレールなんだぜ！",
+        },
+        // Q7
+        {
+          ask: "京成線の架線の電圧は何ボルト？　家のコンセントは100ボルトだぜ。",
+          choices: ["100ボルト", "1,500ボルト", "20,000ボルト"],
+          answer: 2,
+          explain: "答えは1,500ボルト！　コンセントの15倍だ。架線には絶対に近づくなよ！",
+        },
+        // Q8
+        {
+          ask: "電車はブレーキのとき、モーターを発電機にして電気を作る。その電気はどうなる？",
+          choices: ["架線に戻して、ほかの電車が使う", "電車の電池にためる", "熱にして捨てるだけ"],
+          answer: 1,
+          explain: "回生ブレーキっていうんだ。減速するときのエネルギーを電気に変えて、再利用するんだぜ！",
+        },
+        // Q9
+        {
+          ask: "京成線と、JRの一般的な在来線。線路の幅が広いのはどっち？",
+          choices: ["京成線", "JRの一般的な在来線", "同じ"],
+          answer: 1,
+          explain: "京成は1,435ミリ、JRの一般的な在来線は1,067ミリだ。",
+        },
+        // Q10 雷の問題（音の速さ）。まちがえたときは「おしい！」の代わりに、選んだ答えへの返し（reply）を出す
+        {
+          before: "最後は、速さの勝負だ。問題！",
+          ask: ["雷がピカッと光ってから、ゴロゴロが聞こえるまで3秒。", "雷までは、だいたいどれくらい？"],
+          choices: [
+            { text: "約100m", reply: "それなら0.3秒くらいで聞こえるはずだ！" },
+            { text: "約1km" },
+            { text: "約10km", reply: "それだと30秒くらいかかる計算だぜ！" },
+            { text: "光ってすぐだから0m", reply: "光が速すぎて、音が置いていかれてるんだよ！" },
+          ],
+          answer: 2,
+          explain: "答えは約1kmだ！　音は1秒で約340メートル。3秒なら340×3だ。",
+          plus: "340×3で、だいたい1,000メートル。",
+          after: "光はほぼ一瞬で届くけど、音はずっとおそいんだ。",
+        },
+      ],
+      // 正解数のセリフ。{total} は出した問題の数、{n} は正解した数
+      score: "{total}問中{n}問正解だ！",
+      // count：出した問題の数ごとに、そのセリフを出す正解数の範囲 [いくつから, いくつまで]
+      results: [
+        { count: { 10: [0, 2], 5: [0, 1] }, text: "おっと、今回はなかなか難しかったな！　でも、これで新しいことを覚えただろ？" },
+        { count: { 10: [3, 4], 5: [2, 2] }, text: "なるほどな！　まだまだ知らないことがあるってわけだ。電車って奥が深いよな！" },
+        { count: { 10: [5, 6], 5: [3, 3] }, text: "おっ、半分以上正解じゃん！　なかなかやるな！" },
+        { count: { 10: [7, 8] }, text: "おおっ、かなり正解したな！　さすが電車好きだぜ！" },   // 家の日（5問）は使わない
+        { count: { 10: [9, 9], 5: [4, 4] }, text: "あと1問で全問正解だったのに！　惜しい！　でも、すごいじゃん！" },
+        { count: { 10: [10, 10], 5: [5, 5] }, text: "うおおっ、全問正解！　すげえ！　オレも負けてられないぜ！" },
+      ],
+    },
+    next: "jolteon_word",   // クイズが終わったら、そのまま次へ（「つづける」のボタンは出さない）
   },
 
   jolteon_word: {
@@ -1391,7 +1509,6 @@ const SCENES = {
     mode: "chat",
     give: "jolteon",
     lines: [
-      "サンダース：光はほぼ一瞬で届くけど、音はずっと遅いんだ。",
       "サンダース：オレは、思い立ったらすぐ走り出す。迷ってるヒマがあったら、まず動く！",
       "イーブイ：すぐ動ける毎日か……。ぼくは、迷ってばっかりだ。",
       "サンダース：迷うのも悪くないけどな。",
