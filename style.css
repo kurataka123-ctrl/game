@@ -1799,6 +1799,19 @@ button { font: inherit; color: inherit; touch-action: manipulation; }
   .party-info { flex-direction: column; gap: 0; }
 }
 
+/* なかまの場面へ（クリアした仲間の場面へもどる。なかまノートと同じ並べ方） */
+.panel-note.pre { white-space: pre-line; line-height: 1.7; }
+.replay-cell { width: 100%; border: 0; font: inherit; color: inherit; text-align: left; }
+button.replay-cell { cursor: pointer; transition: transform .12s, background-color .2s; }
+button.replay-cell:hover { background: #fff6e2; }
+button.replay-cell:active { transform: scale(.97); }
+.replay-cell.locked .party-slot { color: #c9bfa8; font-size: 20px; }
+/* スマホでも、場所（1-2　氷の洞窟など）を名前の上に出す（なかまノートのように横に並べると、折り返すため） */
+@media (max-width: 480px) {
+  .replay-cell .party-info { flex-direction: column; align-items: flex-start; gap: 0; }
+  .replay-cell .party-name { width: auto; }
+}
+
 /* 言葉（最後の謎で使う。文字は光らせない） */
 .word.big { display: block; font-size: clamp(26px, 7vw, 34px); font-weight: 700; letter-spacing: .08em; line-height: 1.4; }
 .word-panel { border: 4px solid var(--c, var(--gold)); }

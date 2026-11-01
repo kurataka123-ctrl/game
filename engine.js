@@ -30,6 +30,7 @@
   const HS = tryGet(() => HOUSE);
   const BT = tryGet(() => BATTLES) || {};
   const MV = tryGet(() => MOVES) || {};
+  const RP = tryGet(() => REPLAY) || [];   // クリアしたなかまへ戻るメニュー（設計書 第11節）
   // 音を鳴らす仕組み（sound.js）。読み込めなかったときは、音なしで遊べるようにする
   const SND = window.SOUND || {
     init() {}, play: () => false, preview() {}, ambient() {}, setMode() {}, isOn: () => false, setOn() {},
@@ -342,9 +343,12 @@
   // walk：歩けるマップで最後にいた場所（{ scene, map, x, y, dir }）
   // parks・parkManual・parkMisses：公園で気配を探す（GPSヒント機能）の記録
   //   見つけた公園の id・「気配を見つけたことにする」で増やした数・続けて見つからなかった回数（現在地は記録しない）
+  // cleared：この端末で、言葉（give）を受けとった仲間（クリアした仲間。「なかまの場面へ」に出す）
+  // main：「なかまの場面へ」で遊び直している間だけ、いちばん先まで進んだ所を覚えておく（MAIN_KEYS の項目）
   const freshState = () => ({
     scene: null, met: [], words: [], flags: [], name: "", chapter: "", bg: "", atEnd: false, walk: null,
     parks: [], parkManual: 0, parkMisses: 0,
+    cleared: [], main: null,
   });
   let state = freshState();
   let gen = 0;            // 場面が変わるたびに増える番号（古いタイマーを無効にする）
@@ -2991,11 +2995,15 @@
     const skipLines = backToWalk || Boolean(sc.search && parkCount() > 0);
     state.scene = id;
     state.atEnd = false;
+    // 遊び直し（なかまの場面へ）で、いちばん先まで進んだ所に追いついたら、ふつうの記録にもどす
+    if (state.main && sceneOrder(id) >= sceneOrder(state.main.scene)) state.main = null;
     state.chapter = sc.chapter || (jump ? inherited(id, "chapter") : state.chapter);
     state.bg = sc.bg || (jump ? inherited(id, "bg") : state.bg);
     applyMeet(sc);
     setFlags(sc);
-    if (sc.parkReset === true) clearParks();   // 3-0：公園で見つけた記録を空にする（合言葉で始め直したとき用）
+    // 3-0：公園で見つけた記録を空にする（合言葉で始め直したとき用）
+    //   遊び直し（なかまの場面へ）の途中では消さない（いちばん先まで進んだ所の記録を減らさないため）
+    if (sc.parkReset === true && !state.main) clearParks();
     storage.save(state);
     if (DEBUG) debugNow(id);
     // 音の鳴らし方：第3部（mute）は鳴らさない。iPhone の場面（chat）は短い通知音だけ。PCの場面は全部
@@ -3059,6 +3067,8 @@
       return;
     }
     if (!state.words.includes(id)) state.words.push(id);
+    // この端末でクリアした仲間として記録する（合言葉の場面の give: [ ] では記録しない）
+    if (!state.cleared.includes(id)) state.cleared.push(id);
     storage.save(state);
     const afterWord = () => view.say(sc.afterWord, then, !(hasChoices(sc) || sc.input));
     view.reveal(id, sc.afterWord ? afterWord : then);
@@ -3214,6 +3224,9 @@
       houseMapOn() || (RM && flagOn("roomMap"))
         ? el("button", { class: "btn", type: "button", text: houseMapOn() ? T("menuHouseMap") : T("menuMap"), onclick: openMap })
         : null,
+      replayRows(state).some((r) => r.done)
+        ? el("button", { class: "btn", type: "button", text: T("menuReplay"), onclick: () => openReplay(state) })
+        : null,
       soundButton("btn"),
       el("button", { class: "btn", type: "button", text: T("menuToTitle"), onclick: showTitle }),
       el("p", { class: "panel-note", text: T("menuNote") }),
@@ -3245,6 +3258,76 @@
       box,
       caption,
       el("button", { class: "btn primary", type: "button", text: T("close"), onclick: closeOverlay })));
+  }
+
+  // ---- クリアしたなかまへ戻る（設計書 第11節。data.js の REPLAY） ----
+  //  遊び直している間も、いちばん先まで進んだ所（state.main）は減らさない。
+  //  「つづきから」は、いちばん先の所から再開する。遊び直しが、その所に追いついたら、ふつうの記録にもどる
+  //  （追いついたかは、data.js の SCENES に書いた順番で決める）
+  const SCENE_IDS = Object.keys(SCN);
+  const sceneOrder = (id) => SCENE_IDS.indexOf(id);
+  // 端末の分け方は、場面の mode で決める（"chat" は iPhone、ほかは PC）
+  const deviceOf = (id) => (SCN[id] && SCN[id].mode === "chat" ? "phone" : "pc");
+  // いちばん先まで進んだ所として覚えておく項目（なかまノートの言葉・会った仲間・名前は、いつも減らさない）
+  const MAIN_KEYS = ["scene", "atEnd", "walk", "chapter", "bg", "flags"];
+  function mainOf(st) {
+    const m = {};
+    for (const k of MAIN_KEYS) {
+      const v = st[k];
+      m[k] = Array.isArray(v) ? v.slice() : v && typeof v === "object" ? Object.assign({}, v) : v;
+    }
+    return m;
+  }
+
+  // 「なかまの場面へ」に並べる仲間：クリアした仲間が1匹でもいる端末の仲間（まだの仲間は done: false）
+  //   ふつうは、その端末の仲間だけが並ぶ（PCの3匹か、iPhoneの5匹）
+  function replayRows(st) {
+    const cleared = toArray(st && st.cleared);
+    const rows = RP.filter((r) => r && CHARS[r.who] && SCN[r.scene])
+      .map((r) => ({ r, device: deviceOf(r.scene), done: cleared.includes(r.who) }));
+    const devices = new Set(rows.filter((x) => x.done).map((x) => x.device));
+    return rows.filter((x) => devices.has(x.device));
+  }
+
+  // st：並べるときに使う記録（タイトル画面では、この端末に保存した記録）
+  function openReplay(st) {
+    const cells = replayRows(st).map(({ r, done }) => {
+      const c = CHARS[r.who];
+      if (!done) {
+        // まだクリアしていない仲間は「？」だけ（名前も絵も出さない）
+        return el("div", { class: "party-cell replay-cell locked", "aria-label": T("replayLocked") },
+          el("div", { class: "party-slot", text: T("replayLocked") }),
+          el("div", { class: "party-info" },
+            el("span", { class: "party-name" }),
+            el("span", { class: "party-word none", text: T("replayLocked") })));
+      }
+      const slot = el("div", { class: "party-slot met", style: `--c:${c.color || "#ccc"}`, text: c.emoji || "" });
+      return el("button", { class: "party-cell met replay-cell", type: "button", onclick: () => startReplay(r) },
+        withArt(slot, r.who),
+        el("div", { class: "party-info" },
+          el("span", { class: "party-name", text: fill(r.label || "") }),
+          el("span", { class: "party-word", text: charName(c) })));
+    });
+    openOverlay(el("div", { class: "panel" },
+      el("h2", { text: T("replayTitle") }),
+      el("p", { class: "panel-note pre", text: T("replayNote") }),
+      el("div", { class: "party-grid" }, cells),
+      el("button", { class: "btn primary", type: "button", text: T("close"), onclick: closeOverlay })));
+  }
+
+  // 選んだ仲間の場面を、最初から始める。終えたら、話の続きへそのまま進む
+  function startReplay(r) {
+    // タイトル画面から選んだときは、この端末に保存した記録で始める
+    if (currentView === "title") loadState(storage.load());
+    // いちばん先まで進んだ所を覚えておく（遊び直しの途中で、また選んだときは、前に覚えた所のまま）
+    if (!state.main && state.scene && SCN[state.scene]) state.main = mainOf(state);
+    state.atEnd = false;
+    state.walk = null;   // 歩けるマップは、場面の最初の場所から
+    // その場面の中だけで使う条件は消してから始める（1-3 の友達など。data.js の REPLAY の unset）
+    for (const f of toArray(r.unset)) state.flags = state.flags.filter((x) => x !== f);
+    // メッセージ画面（iPhone）で選んだときも、前の会話を消してから始める
+    currentView = "";
+    runScene(r.scene, true);
   }
 
   function confirmBox(message, yesLabel, onYes) {
@@ -3288,6 +3371,9 @@
     SND.bgm(null);
     const save = storage.load();
     const canResume = Boolean(save && save.scene && SCN[save.scene]);
+    // 「なかまの場面へ」は、この端末でクリアした仲間がいるときだけ出す
+    const saved = save ? normalized(save) : null;
+    const canReplay = Boolean(saved && replayRows(saved).some((r) => r.done));
     // 記録があるときは「つづきから」をいちばん上にする（まちがえて最初からにしないように）
     titleScreen.replaceChildren(el("div", { class: "title-wrap" },
       el("div", { class: "title-deco", text: "✦　✧　✦", "aria-hidden": "true" }),
@@ -3297,6 +3383,7 @@
         canResume ? el("button", { class: "btn primary", type: "button", text: T("resume"), onclick: () => resume(save) }) : null,
         el("button", { class: canResume ? "btn" : "btn primary", type: "button", text: T("newGame"), onclick: () => newGame(canResume) }),
         el("button", { class: "btn", type: "button", text: T("keywordButton"), onclick: showKeyword }),
+        canReplay ? el("button", { class: "btn", type: "button", text: T("titleReplay"), onclick: () => openReplay(saved) }) : null,
         soundButton("btn ghost title-sound")),
       S.footer ? el("p", { class: "title-foot", text: S.footer }) : null));
     show("title");
@@ -3313,23 +3400,43 @@
     else go();
   }
 
-  function loadState(save) {
-    state = Object.assign(freshState(), save || {});
-    if (!Array.isArray(state.met)) state.met = [];
-    if (!Array.isArray(state.words)) state.words = [];
-    if (!Array.isArray(state.flags)) state.flags = [];
-    if (typeof state.name !== "string") state.name = "";
+  // 保存した記録を、ゲームで使える形にそろえる（足りない項目や、こわれた項目を直す）
+  function normalized(save) {
+    const st = Object.assign(freshState(), save || {});
+    if (!Array.isArray(st.met)) st.met = [];
+    if (!Array.isArray(st.words)) st.words = [];
+    if (!Array.isArray(st.flags)) st.flags = [];
+    if (typeof st.name !== "string") st.name = "";
     // 公園の記録がない古い記録は、初期値で補う
-    state.parks = Array.isArray(state.parks) ? state.parks.filter((x) => typeof x === "string") : [];
-    state.parkManual = Math.max(0, Math.floor(Number(state.parkManual) || 0));
-    state.parkMisses = Math.max(0, Math.floor(Number(state.parkMisses) || 0));
+    st.parks = Array.isArray(st.parks) ? st.parks.filter((x) => typeof x === "string") : [];
+    st.parkManual = Math.max(0, Math.floor(Number(st.parkManual) || 0));
+    st.parkMisses = Math.max(0, Math.floor(Number(st.parkMisses) || 0));
+    // 前の版の記録（cleared がない）：もらった言葉のうち、今いる端末の仲間をクリアしたとみなす
+    //   （合言葉で引きついだ、もう一方の端末の仲間は入れない。端末は場面の mode で決める）
+    if (!Array.isArray(save && save.cleared)) {
+      st.cleared = SCN[st.scene]
+        ? RP.filter((r) => r && SCN[r.scene] && st.words.includes(r.who) && deviceOf(r.scene) === deviceOf(st.scene)).map((r) => r.who)
+        : [];
+    }
+    if (!st.main || typeof st.main !== "object" || !SCN[st.main.scene]) st.main = null;
+    else if (!Array.isArray(st.main.flags)) st.main.flags = st.flags.slice();
+    return st;
+  }
+
+  function loadState(save) {
+    state = normalized(save);
     updateParty();
   }
 
   // 章の終わりの画面で止めていたときは、その画面から再開する
   // 場面に resume（data.js）を書いたときは、その場面から再開する（2-7 のiPhone側：入力欄ではなく、暗い窓から）
+  // 「なかまの場面へ」で遊び直している途中なら、いちばん先まで進んだ所から再開する
   function resume(save) {
     loadState(save);
+    if (state.main) {
+      Object.assign(state, state.main);
+      state.main = null;
+    }
     const sc = SCN[state.scene];
     if (state.atEnd && sc && sc.end) showEnd(sc);
     else runScene(sc && sc.resume && SCN[sc.resume] ? sc.resume : state.scene);
@@ -3401,7 +3508,9 @@
       history.replaceState(null, "", location.pathname + (DEBUG ? "?debug" : ""));
     } catch (e) { /* 消せなくても遊べる */ }
     const save = storage.load();
-    if (save && save.scene && SCN[save.scene] && save.scene !== id) {
+    // 遊び直し（なかまの場面へ）の途中なら、いちばん先まで進んだ所とくらべる
+    const at = save && save.main && save.main.scene ? save.main.scene : save && save.scene;
+    if (at && SCN[at] && at !== id) {
       showTitle();
       openOverlay(el("div", { class: "panel" },
         el("div", { class: "kw-icon", text: "🔑", "aria-hidden": "true" }),
@@ -3428,6 +3537,7 @@
     "wordGet", "wordFrom", "wordGetChat", "wordNote", "ok", "metToast",
     "partyTitle", "partyNote", "partyNoteMet", "partyNoteAll", "close",
     "menuTitle", "menuParty", "menuMap", "menuHouseMap", "menuToTitle", "menuNote",
+    "menuReplay", "titleReplay", "replayTitle", "replayNote", "replayLocked",
     "mapTitle", "mapCaption", "explore", "roomDone", "darkDefault", "darkShine",
     "houseMapTitle", "houseMapCaption", "houseStarTemp",
     "iceHelp", "iceCount", "iceReset", "iceSkip", "iceBest", "iceClear",
@@ -3703,6 +3813,23 @@
       if (!toArray(words).length) errors.push(`合言葉の「${id}」に、合言葉が書かれていません。`);
       checkAnswers(words, `合言葉の「${id}」`);
     }
+    // クリアしたなかまへ戻るメニュー（REPLAY）
+    const replayWho = new Set();
+    toArray(RP).forEach((r, i) => {
+      const at = `REPLAY の${i + 1}番目`;
+      if (!r || typeof r !== "object") {
+        errors.push(`${at}：{ who: "glaceon", scene: "glaceon" } のように書いてください。`);
+        return;
+      }
+      if (!CHARS[r.who]) errors.push(`${at}：「${r.who}」というキャラクターがいません。`);
+      else if (!CHARS[r.who].word) warnings.push(`${at}：「${CHARS[r.who].name}」には言葉（word）がないので、クリアになりません。`);
+      else if (!Object.values(SCN).some((sc) => sc && sc.give === r.who)) warnings.push(`${at}：「${CHARS[r.who].name}」の言葉を受けとる場面（give: "${r.who}"）がないので、クリアになりません。`);
+      if (replayWho.has(r.who)) warnings.push(`${at}：「${r.who}」が2回書かれています。`);
+      replayWho.add(r.who);
+      if (!r.scene) errors.push(`${at}：始める場面（scene）が書かれていません。`);
+      else check(r.scene, at);
+      checkText(r.label, `${at} の label`);
+    });
     if (PZ) {
       const rows = toArray(PZ.rows).map((r) => Array.from(String(r)));
       const cols = Math.max(0, ...rows.map((r) => r.length));
@@ -4260,7 +4387,7 @@
         select,
         el("button", { type: "button", text: "この場面へ", onclick: () => { panel.hidden = true; runScene(select.value, true); } })),
       el("div", { class: "debug-row" },
-        el("button", { type: "button", text: "なかまと言葉を全部にする", onclick: () => { state.met = PARTY.slice(); state.words = PARTY.slice(); storage.save(state); updateParty(); toast("なかまと言葉を全部そろえました"); } }),
+        el("button", { type: "button", text: "なかまと言葉を全部にする", onclick: () => { state.met = PARTY.slice(); state.words = PARTY.slice(); state.cleared = PARTY.slice(); storage.save(state); updateParty(); toast("なかまと言葉を全部そろえました（なかまの場面へは、PCとiPhoneの両方の仲間が出ます）"); } }),
         el("button", { type: "button", text: "記録（セーブ）を消す", onclick: () => { storage.clear(); state = freshState(); updateParty(); toast("記録を消しました"); } }),
         // 公園で気配を探す（GPSヒント機能）の記録だけを消す（見つけた公園・手動で増やした数・続けて見つからなかった回数）
         el("button", { type: "button", text: "気配の記録を消す", onclick: () => { clearParks(); storage.save(state); toast("気配の記録を消しました"); } })),
