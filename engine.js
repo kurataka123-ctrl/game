@@ -31,6 +31,7 @@
   const BT = tryGet(() => BATTLES) || {};
   const MV = tryGet(() => MOVES) || {};
   const RP = tryGet(() => REPLAY) || [];   // クリアしたなかまへ戻るメニュー（設計書 第11節）
+  const BN = tryGet(() => BONUS) || {};    // クリア後のおたのしみ（設計書 第11節。PCのみ）
   // 音を鳴らす仕組み（sound.js）。読み込めなかったときは、音なしで遊べるようにする
   const SND = window.SOUND || {
     init() {}, play: () => false, preview() {}, ambient() {}, setMode() {}, isOn: () => false, setOn() {},
@@ -397,10 +398,11 @@
   //   見つけた公園の id・「気配を見つけたことにする」で増やした数・続けて見つからなかった回数（現在地は記録しない）
   // cleared：この端末で、言葉（give）を受けとった仲間（クリアした仲間。「なかまの場面へ」に出す）
   // main：「なかまの場面へ」で遊び直している間だけ、いちばん先まで進んだ所を覚えておく（MAIN_KEYS の項目）
+  // finished：最終章を終えた（4-6 の終わりの画面を出した。data.js の end の complete）。タイトル画面に「おたのしみ」を出す
   const freshState = () => ({
     scene: null, met: [], words: [], flags: [], name: "", chapter: "", bg: "", atEnd: false, walk: null,
     parks: [], parkManual: 0, parkMisses: 0,
-    cleared: [], main: null,
+    cleared: [], main: null, finished: false,
   });
   let state = freshState();
   let gen = 0;            // 場面が変わるたびに増える番号（古いタイマーを無効にする）
@@ -3567,6 +3569,7 @@
     const e = sc.end || {};
     gen += 1;
     state.atEnd = true;
+    if (e.complete === true) state.finished = true;   // 最終章を終えた記録（タイトル画面に「おたのしみ」を出す）
     storage.save(state);
     SND.setMode(sc.mute ? "off" : "short");   // 終わりの画面では、くり返す音（風など）を止める
     SND.ambient(null);
@@ -3594,6 +3597,8 @@
   // ==============================================================
   // onClose：とじたときに1回だけ呼ぶ（場面が変わったあとは呼ばない）
   let onOverlayClose = null;
+  // 重ねて表示する画面が、自分で使うキー（回想ギャラリーの ←→ など）。使ったら true を返す。開くたびに空にする
+  let overlayKey = null;
   // メニュー（≡）・なかまノートのボタンが選ばれたままだと、Enter でまた開いてしまう
   // （Esc で閉じたとき）。開くときと閉じるときに、選ばれた状態を外して、Enter を文を進めるのに使う
   function releaseFocus() {
@@ -3601,6 +3606,7 @@
     if (a && a !== document.body && !overlay.contains(a) && a.matches("button, a") && typeof a.blur === "function") a.blur();
   }
   function openOverlay(content, onClose) {
+    overlayKey = null;
     overlay.replaceChildren(content);
     overlay.classList.add("open");
     releaseFocus();
@@ -3608,6 +3614,7 @@
     onOverlayClose = onClose ? () => { if (token === gen) onClose(); } : null;
   }
   function closeOverlay() {
+    overlayKey = null;
     overlay.classList.remove("open");
     overlay.replaceChildren();
     releaseFocus();
@@ -3752,7 +3759,8 @@
   }
 
   // st：並べるときに使う記録（タイトル画面では、この端末に保存した記録）
-  function openReplay(st) {
+  // back：「◀ もどる」で開き直す画面（「おたのしみ」から開いたとき）
+  function openReplay(st, back) {
     const cells = replayRows(st).map(({ r, done }) => {
       const c = CHARS[r.who];
       if (!done) {
@@ -3774,7 +3782,80 @@
       el("h2", { text: T("replayTitle") }),
       el("p", { class: "panel-note pre", text: T("replayNote") }),
       el("div", { class: "party-grid" }, cells),
+      back ? el("button", { class: "btn", type: "button", text: T("replayBack"), onclick: back }) : null,
       el("button", { class: "btn primary", type: "button", text: T("close"), onclick: closeOverlay })));
+  }
+
+  // ---- クリア後のおたのしみ（設計書 第11節。PCのみ。data.js の BONUS） ----
+  //   最終章を終えた記録（state.finished）があるとき、タイトル画面に出す
+  //   中は「なかまの場面へ」（今の REPLAY）・「雪だるま戦・強いモード」・「回想ギャラリー」
+  //   st：この端末に保存した記録（タイトル画面から開く）
+  function openBonus(st) {
+    const again = () => openBonus(st);
+    const canReplay = replayRows(st).some((r) => r.done);
+    openOverlay(el("div", { class: "panel bonus-panel" },
+      el("h2", { text: T("bonusTitle") }),
+      el("p", { class: "panel-note pre", text: T("bonusNote") }),
+      el("div", { class: "bonus-menu" },
+        canReplay ? el("button", { class: "btn", type: "button", text: T("bonusReplay"), onclick: () => openReplay(st, again) }) : null,
+        el("button", { class: "btn", type: "button", text: T("bonusGallery"), onclick: () => openGallery(again) })),
+      el("button", { class: "btn primary", type: "button", text: T("close"), onclick: closeOverlay })));
+  }
+
+  // 回想ギャラリー：BONUS の gallery の絵のうち、見つかったものだけを並べる（PCで直接開いたときだけ探す）
+  //   back：「◀ もどる」で開き直す画面（おたのしみ）
+  const galleryList = () => toArray(BN.gallery)
+    .filter((g) => g && typeof g.image === "string" && g.image.trim())
+    .map((g) => ({ image: g.image.trim(), label: fill(g.label || "") }));
+  function openGallery(back) {
+    const items = galleryList();
+    const grid = el("div", { class: "gallery-grid" }, el("p", { class: "panel-note", text: T("galleryLoading") }));
+    const panel = el("div", { class: "panel gallery-panel" },
+      el("h2", { text: T("galleryTitle") }),
+      el("p", { class: "panel-note", text: T("galleryNote") }),
+      grid,
+      back ? el("button", { class: "btn", type: "button", text: T("replayBack"), onclick: back }) : null,
+      el("button", { class: "btn primary", type: "button", text: T("close"), onclick: closeOverlay }));
+    openOverlay(panel);
+    Promise.all(items.map((g) => (ART_DIR ? findPicture(g.image) : Promise.resolve("")))).then((srcs) => {
+      if (!panel.isConnected) return;   // 待っているあいだに、閉じた・ほかの画面にした
+      const found = items.map((g, i) => Object.assign({ src: srcs[i] }, g)).filter((g) => g.src);
+      if (!found.length) {
+        grid.replaceChildren(el("p", { class: "panel-note pre", text: T("galleryEmpty") }));
+        return;
+      }
+      grid.replaceChildren(...found.map((g, i) => el("button", {
+        class: "gallery-cell", type: "button", onclick: () => openViewer(found, i, back),
+      },
+        el("img", { class: "gallery-thumb", src: g.src, alt: "", draggable: "false" }),
+        el("span", { class: "gallery-label", text: g.label }))));
+    });
+  }
+  // 1枚を大きく見る。←→キー（またはボタン）で、まえ・つぎの絵。「一覧へ」で、並べた画面にもどる
+  function openViewer(found, start, back) {
+    let at = start;
+    const img = el("img", { class: "gallery-big", alt: "", draggable: "false" });
+    const cap = el("p", { class: "gallery-cap" });
+    const go = (step) => {
+      at = (at + step + found.length) % found.length;
+      img.src = found[at].src;
+      cap.textContent = `${found[at].label}　${T("galleryCount", { n: at + 1, total: found.length })}`;
+    };
+    const many = found.length > 1;
+    openOverlay(el("div", { class: "panel gallery-view" },
+      el("div", { class: "gallery-frame" }, img),
+      cap,
+      el("div", { class: "panel-buttons" },
+        many ? el("button", { class: "btn", type: "button", text: T("galleryPrev"), onclick: () => go(-1) }) : null,
+        el("button", { class: "btn", type: "button", text: T("galleryList"), onclick: () => openGallery(back) }),
+        many ? el("button", { class: "btn", type: "button", text: T("galleryNext"), onclick: () => go(1) }) : null),
+      el("button", { class: "btn primary", type: "button", text: T("close"), onclick: closeOverlay })));
+    go(0);
+    overlayKey = (e) => {
+      if (e.key === "ArrowLeft" && many) { if (!e.repeat) go(-1); return true; }
+      if (e.key === "ArrowRight" && many) { if (!e.repeat) go(1); return true; }
+      return false;
+    };
   }
 
   // 選んだ仲間の場面を、最初から始める。終えたら、話の続きへそのまま進む
@@ -3835,8 +3916,10 @@
     const save = storage.load();
     const canResume = Boolean(save && save.scene && SCN[save.scene]);
     // 「なかまの場面へ」は、この端末でクリアした仲間がいるときだけ出す
+    //   最終章を終えた記録があるときは、代わりに「おたのしみ」を出す（「なかまの場面へ」は、その中に入る）
     const saved = save ? normalized(save) : null;
-    const canReplay = Boolean(saved && replayRows(saved).some((r) => r.done));
+    const finished = Boolean(saved && saved.finished);
+    const canReplay = !finished && Boolean(saved && replayRows(saved).some((r) => r.done));
     // 記録があるときは「つづきから」をいちばん上にする（まちがえて最初からにしないように）
     titleScreen.replaceChildren(el("div", { class: "title-wrap" },
       el("div", { class: "title-deco", text: "✦　✧　✦", "aria-hidden": "true" }),
@@ -3847,6 +3930,7 @@
         el("button", { class: canResume ? "btn" : "btn primary", type: "button", text: T("newGame"), onclick: () => newGame(canResume) }),
         el("button", { class: "btn", type: "button", text: T("keywordButton"), onclick: showKeyword }),
         canReplay ? el("button", { class: "btn", type: "button", text: T("titleReplay"), onclick: () => openReplay(saved) }) : null,
+        finished ? el("button", { class: "btn", type: "button", text: T("titleBonus"), onclick: () => openBonus(saved) }) : null,
         soundButton("btn ghost title-sound")),
       S.footer ? el("p", { class: "title-foot", text: S.footer }) : null));
     show("title");
@@ -3954,6 +4038,11 @@
     }
     if (!st.main || typeof st.main !== "object" || !SCN[st.main.scene]) st.main = null;
     else if (!Array.isArray(st.main.flags)) st.main.flags = st.flags.slice();
+    // 前の版の記録（finished がない）：最終章の終わりの画面（end の complete）にいれば、終えたとみなす
+    if (typeof (save && save.finished) !== "boolean") {
+      const doneAt = (m) => Boolean(m && m.atEnd && SCN[m.scene] && SCN[m.scene].end && SCN[m.scene].end.complete === true);
+      st.finished = doneAt(st) || doneAt(st.main);
+    }
     return st;
   }
 
@@ -4073,6 +4162,8 @@
     "menuTitle", "menuParty", "menuMap", "menuHouseMap", "menuToTitle", "menuNote",
     "menuReplay", "titleReplay", "replayTitle", "replayNote", "replayLocked",
     "logButton", "logHelp", "logTitle", "logNote", "logEmpty", "logPicked",
+    "replayBack", "titleBonus", "bonusTitle", "bonusNote", "bonusReplay", "bonusGallery",
+    "galleryTitle", "galleryNote", "galleryLoading", "galleryEmpty", "galleryCount", "galleryPrev", "galleryNext", "galleryList",
     "mapTitle", "mapCaption", "explore", "roomDone", "darkDefault", "darkShine",
     "houseMapTitle", "houseMapCaption", "houseStarTemp",
     "iceHelp", "iceCount", "iceReset", "iceSkip", "iceBest", "iceClear",
@@ -4356,6 +4447,7 @@
           else checkText(ln && typeof ln === "object" ? ln.text : ln, where);
         });
         if (sc.end.snow !== undefined && typeof sc.end.snow !== "boolean") errors.push(`${at} の end の snow は、true か false にしてください。`);
+        if (sc.end.complete !== undefined && typeof sc.end.complete !== "boolean") errors.push(`${at} の end の complete は、true か false にしてください。`);
       }
       // 文のあとの演出（finale。4-6 エピローグ）：雪をふらせてから、最後のイラストに切りかえる
       if (sc.finale !== undefined) {
@@ -4423,6 +4515,19 @@
       if (!r.scene) errors.push(`${at}：始める場面（scene）が書かれていません。`);
       else check(r.scene, at);
       checkText(r.label, `${at} の label`);
+    });
+    // クリア後のおたのしみ（BONUS）：最終章を終えた記録を残す場面と、回想ギャラリーの絵
+    if (!Object.values(SCN).some((sc) => sc && sc.end && sc.end.complete === true)) {
+      warnings.push("end に complete: true を書いた場面がないので、最終章を終えた記録が残らず、タイトル画面に「おたのしみ」が出ません。");
+    }
+    if (BN.gallery !== undefined && !Array.isArray(BN.gallery)) errors.push("BONUS の gallery は [ ] で囲んでください。");
+    toArray(BN.gallery).forEach((g, i) => {
+      const at = `BONUS の gallery の${i + 1}番目`;
+      if (!g || typeof g !== "object" || typeof g.image !== "string" || !g.image.trim() || /^[\\/]|\.\./.test(g.image.trim())) {
+        errors.push(`${at}：{ image: "kaisou/グレイシア.png", label: "グレイシア" } のように、pc-images の中の画像の場所を書いてください。`);
+        return;
+      }
+      checkText(g.label, `${at} の label`);
     });
     if (PZ) {
       const rows = toArray(PZ.rows).map((r) => Array.from(String(r)));
@@ -5065,6 +5170,8 @@
       const fp = sc && sc.finale && typeof sc.finale.image === "string" ? sc.finale.image.trim() : "";
       if (fp && !paths.includes(fp)) paths.push(fp);
     }
+    // 回想ギャラリー（おたのしみ）の絵
+    for (const g of galleryList()) if (!paths.includes(g.image)) paths.push(g.image);
     const picInfo = el("div", { text: paths.length ? "絵（image）：調べています……" : "絵（image）：data.js に書かれていません。" });
     if (paths.length) {
       Promise.all(paths.map(findPicture)).then((srcs) => {
@@ -5104,6 +5211,8 @@
       el("div", { class: "debug-row" },
         el("button", { type: "button", text: "なかまと言葉を全部にする", onclick: () => { state.met = PARTY.slice(); state.words = PARTY.slice(); state.cleared = PARTY.slice(); storage.save(state); updateParty(); toast("なかまと言葉を全部そろえました（なかまの場面へは、PCとiPhoneの両方の仲間が出ます）"); } }),
         el("button", { type: "button", text: "記録（セーブ）を消す", onclick: () => { storage.clear(); state = freshState(); updateParty(); toast("記録を消しました"); } }),
+        // クリア後のおたのしみを試すため（タイトル画面に「おたのしみ」が出る）
+        el("button", { type: "button", text: "最終章を終えた記録をつける", onclick: () => { state.finished = true; storage.save(state); toast("最終章を終えた記録をつけました（タイトル画面に「おたのしみ」が出ます）"); } }),
         // 公園で気配を探す（GPSヒント機能）の記録だけを消す（見つけた公園・手動で増やした数・続けて見つからなかった回数）
         el("button", { type: "button", text: "気配の記録を消す", onclick: () => { clearParks(); storage.save(state); toast("気配の記録を消しました"); } })),
       el("h4", { text: "遊ぶ前の準備：友達の呼び名（ちがう呼び名にするときだけ。このPCだけに記録）" }),
@@ -5158,6 +5267,7 @@
       return;
     }
     if (overlay.classList.contains("open")) {
+      if (overlayKey && overlayKey(e)) { e.preventDefault(); return; }
       if (e.key === "Escape") closeOverlay();
       return;
     }

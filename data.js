@@ -1897,6 +1897,7 @@ const SCENES = {
     end: {
       bg: "christmas",
       snow: true,
+      complete: true,   // この画面を出したら、最終章を終えた記録を残す（タイトル画面に「おたのしみ」を出す）
       title: "イーブイと8つの夢",
       text: "Fin",
       credits: [
@@ -2185,6 +2186,28 @@ const REPLAY = [
 ];
 
 
+// ---------------- クリア後のおたのしみ（PCのみ。設計書 第11節） ----------------
+//  最終章を終えた記録があると（4-6 の終わりの画面を出したあと）、タイトル画面に「おたのしみ」が出ます。
+//  中は「なかまの場面へ」「雪だるま戦・強いモード」「回想ギャラリー」です。
+//    gallery：回想ギャラリーで見返せる絵（上から順に並べる）
+//      image：pc-images の中の画像の場所（4-3 の行の image・4-6 の finale の image と同じ書き方）
+//      label：絵の下に出す名前
+//      PCで index.html を直接開いたときだけ、画像を探します。画像がないものは出しません。
+const BONUS = {
+  gallery: [
+    { image: "kaisou/グレイシア.png", label: "グレイシア" },
+    { image: "kaisou/ニンフィア.png", label: "ニンフィア" },
+    { image: "kaisou/エーフィ.png",   label: "エーフィ" },
+    { image: "kaisou/ブラッキー.png", label: "ブラッキー" },
+    { image: "kaisou/シャワーズ.png", label: "シャワーズ" },
+    { image: "kaisou/ブースター.png", label: "ブースター" },
+    { image: "kaisou/サンダース.png", label: "サンダース" },
+    { image: "kaisou/リーフィア.png", label: "リーフィア" },
+    { image: "ending.png",            label: "エンディング" },
+  ],
+};
+
+
 // ---------------- 印刷用カード（cards.html で印刷） ----------------
 //  place       : 置き場所のメモ（印刷されない）
 //  text        : カードの文章
@@ -2300,6 +2323,23 @@ const UI = {
   replayTitle: "🔁 なかまの場面へ",
   replayNote: "クリアしたなかまの場面を、はじめから遊べるよ。\nいちばん先まで進んだ所へは、\nタイトルの「つづきから」でもどれる。",
   replayLocked: "？",                // まだクリアしていない仲間
+  replayBack: "◀ もどる",            // 「おたのしみ」から開いたときの、もどるボタン
+
+  // クリア後のおたのしみ（PCのみ。上の BONUS）。最終章を終えた記録があると、タイトル画面に出る
+  //   出ているあいだ、タイトル画面の「なかまの場面へ」は、この中に入る
+  titleBonus: "🎁 おたのしみ",
+  bonusTitle: "🎁 おたのしみ",
+  bonusNote: "クリアした記念に、もう一度遊べるよ。",
+  bonusReplay: "🔁 なかまの場面へ",
+  bonusGallery: "🖼 回想ギャラリー",
+  galleryTitle: "🖼 回想ギャラリー",
+  galleryNote: "絵をクリックすると、大きく見られるよ。",
+  galleryLoading: "絵を探しています……",
+  galleryEmpty: "見られる絵がありません。\n（PCで index.html を直接開き、pc-images に絵を入れると見られます）",
+  galleryCount: "{n} / {total}",     // 大きく見ているときの、何枚目か
+  galleryPrev: "◀ まえ",
+  galleryNext: "つぎ ▶",
+  galleryList: "一覧へ",
 
   // 夢の部屋の地図
   mapTitle: "🗺 夢の部屋の地図",
