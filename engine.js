@@ -299,25 +299,32 @@
 
   // 名前の確認（1-1。data.js の input の check）に使う一覧：pc-images/name.js（書き方は name.sample.js）
   //   PCで index.html を直接開いたとき（file://）だけ読みこむ。公開したページ（iPhone）では読みこまない。
-  //   結果：{ list, status }。status は "ok"（使える）/ "none"（ファイルがない）/ "empty"（NAME_LIST がない・names が空）/ "off"（直接開いていない）
+  //   結果：{ list, status, call }。status は "ok"（使える）/ "none"（ファイルがない）/ "empty"（NAME_LIST がない・names が空）/ "off"（直接開いていない）
   //   list が null のときは、名前を確認せずに進む
+  //   call：強いモード（おたのしみ）で、パパが呼ぶ呼び名（NAME_LIST の call。技の名前「○○ちゃーん」の○○）。なければ ""
   let nameLoad = null;
+  let callLoaded = "";
   function loadNames() {
     if (!nameLoad) {
       nameLoad = new Promise((resolve) => {
-        if (!ART_DIR) { resolve({ list: null, status: "off" }); return; }
+        if (!ART_DIR) { resolve({ list: null, status: "off", call: "" }); return; }
         const s = document.createElement("script");
         s.onload = () => {
-          const list = readNames(tryGet(() => NAME_LIST));
-          resolve({ list, status: list ? "ok" : "empty" });
+          const raw = tryGet(() => NAME_LIST);
+          const list = readNames(raw);
+          const call = raw && typeof raw === "object" && typeof raw.call === "string" ? raw.call.trim() : "";
+          callLoaded = call;
+          resolve({ list, status: list ? "ok" : "empty", call });
         };
-        s.onerror = () => resolve({ list: null, status: "none" });
+        s.onerror = () => resolve({ list: null, status: "none", call: "" });
         s.src = `${ART_DIR}/name.js`;
         document.head.append(s);
       });
     }
     return nameLoad;
   }
+  // パパが呼ぶ呼び名（name.js の call）。読みこみが終わっていないときや、ないときは ""
+  const nameCall = () => callLoaded;
   // name.js の NAME_LIST を、比べやすい形にそろえる（names が1つもなければ null）
   //   names：下の名前の一覧 / family：名字の一覧（名字＋名前でも通す）/ guess：「もしかして」で聞く呼び名（なければ names の1つ目）
   function readNames(raw) {
@@ -1503,7 +1510,7 @@
           el("span", { class: "bt-cmd-key", text: String(i + 1), "aria-hidden": "true" }),
           withArt(el("span", { class: "bt-pick-face", text: (CHARS[id] && CHARS[id].emoji) || "？" }), id),
           el("span", { class: "bt-pick-name", text: whoName(id) }),
-          el("span", { class: "bt-pick-moves", text: battleMovesOf(def, id).map((m) => fill(MV[m].name || m)).join("・") })));
+          el("span", { class: "bt-pick-moves", text: battleMovesOf(def, id).map(moveName).join("・") })));
         const update = () => {
           for (const c of cards) c.classList.toggle("on", sel.includes(c.dataset.id));
           ok.disabled = sel.length !== base.choose;
@@ -1578,7 +1585,7 @@
           onclick: (e) => { e.stopPropagation(); choosePick(id); },
         },
           el("span", { class: "bt-cmd-key", text: String(k + 1), "aria-hidden": "true" }),
-          el("span", { class: "bt-cmd-name", text: fill(MV[id].name || id) }),
+          el("span", { class: "bt-cmd-name", text: moveName(id) }),
           MV[id].note ? el("span", { class: "bt-cmd-note", text: fill(MV[id].note) }) : null));
         const skip = i === first ? skipButton() : null;
         const foot = goBack || skip ? el("div", { class: "bt-menu-foot" },
@@ -1610,7 +1617,8 @@
       const turn = (picks) => {
         NV.mode = "talk";
         ui.menu.replaceChildren();
-        const r = battleTurn(b, st, picks);
+        // 乱数を使うのは、技の fail（強いモードのパパの「スマホに夢中」）だけ
+        const r = battleTurn(b, st, picks, false, Math.random);
         play(r.steps, () => {
           if (!alive()) return;
           st = r.state;
@@ -2118,18 +2126,21 @@
   //   last：相手の最後の何個のハートは、決め技（finish の技）でしか減らないか
   //   on  ：条件の名前が入っているかを調べる関数（点検では、全員が仲間になったものとして調べる）
   //   pick：えらんだ仲間（leader 以外の名前の一覧）。書かなければ、えらべる仲間の上から choose 人
-  //   choose を書いた戦いでは、party のうち条件（if）に合う人が「えらべる仲間」。
-  //   えらべる仲間が choose 人より少ないとき（テスト用メニューでとんだときなど）は、全員からえらべる
+  //   choose を書いた戦いでは、party のうち条件（if・unless）のある人からえらぶ。そのうち条件に合う人が「えらべる仲間」。
+  //   条件のない人（強いモードの合体戦のイーブイ・ニンフィア）は、えらばずに、いつも戦う。
+  //   えらべる仲間が choose 人より少ないとき（テスト用メニューでとんだときなど）は、条件のある全員からえらべる
   function battleOf(id, on = flagOn, pick = null) {
     const def = BT[id];
     if (!def || typeof def !== "object") return null;
     const all = battleParty(def);
     const choose = Math.max(0, Math.floor(Number(def.choose) || 0));
     const others = all.filter((p) => p.who !== def.leader);
-    let can = others.filter((p) => visibleWith(p, on));
-    if (choose && can.length < choose) can = others;
+    const optional = choose ? others.filter((p) => p.if != null || p.unless != null) : others;
+    const fixed = others.filter((p) => !optional.includes(p));
+    let can = optional.filter((p) => visibleWith(p, on));
+    if (choose && can.length < choose) can = optional;
     const chosen = !choose ? can : pick ? can.filter((p) => pick.includes(p.who)) : can.slice(0, choose);
-    const members = all.filter((p) => p.who === def.leader || chosen.includes(p)).map((p) => ({
+    const members = all.filter((p) => p.who === def.leader || fixed.includes(p) || chosen.includes(p)).map((p) => ({
       who: p.who,
       leader: p.who === def.leader,
       commands: toArray(p.commands).filter((c) => MV[c]),
@@ -2175,17 +2186,34 @@
   }
 
   // 攻撃の技の強さ（点検で「いちばん強い攻撃」を選ぶため）
+  //   主人公の攻撃を強くする技（boost。強いモードのパパ）は、攻撃の次に選ぶ（防ぐ技よりは先）
   const attackValue = (b, id) => {
     const mv = MV[id];
+    if (mv && mv.kind === "boost") return 0;
     if (!mv || mv.kind !== "attack") return -1;
     return (Number(mv.power) || 0) * Math.max(1, Number(mv.hits) || 1) * (b.weak.includes(mv.type) ? 2 : 1);
   };
 
+  // 技の名前（コマンドのボタンと、技を使ったときの文）
+  //   {call} は、PCだけの pc-images/name.js の call（強いモードのパパが呼ぶ呼び名）。
+  //   呼び名がないとき（name.js がない・call がない・公開ページ）は、技の noCall を使う（書かなければ {call} を {name} にする）
+  function moveName(id) {
+    const mv = MV[id] || {};
+    const raw = String(mv.name || id || "");
+    if (!raw.includes("{call}")) return fill(raw);
+    const call = nameCall();
+    if (!call) return fill(mv.noCall || raw.split("{call}").join("{name}"));
+    return fill(raw.split("{call}").join(call));
+  }
+
   // 1ターン分の出来事を計算する（画面には出さない）
   //   picks：戦う仲間それぞれが選んだ技の名前（members と同じ順番。さくせんで動く仲間の分は null）
   //   quiet：true なら文を作らない（点検で、何度も計算するため）
+  //   rand：技の fail（強いモードのパパの「スマホに夢中」）に使う乱数（0 以上 1 未満）。
+  //         書かなければ、いつも起こらない（点検で、最短のターン数を数えるとき）。乱数を使うのは、この fail だけ
   //   返り値：{ state：ターンのあとの状態, steps：画面に出す文と、そのときの状態（st）・動き（fx）の一覧 }
-  function battleTurn(b, st0, picks, quiet) {
+  function battleTurn(b, st0, picks, quiet, rand) {
+    const luck = typeof rand === "function" ? rand : () => 1;
     const st = Object.assign({}, st0, { charged: Object.assign({}, st0.charged) });
     const e = b.enemy;
     const steps = [];
@@ -2211,13 +2239,19 @@
       }
     };
 
-    // 仲間の番（party の上から順）
+    // 仲間の番（party の上から順。ただし、このターンの最初に動く技〔MOVES の first〕を選んだ仲間が、先に動く）
     let boost = 0;           // てだすけの倍率（次に動く仲間に効く）
     let guardBig = null;     // big の行動（ふぶきなど）を防ぐ技（大技でない攻撃には効かないので、そのときは技の miss を出す）
-    let guardAll = false;    // 相手の攻撃を、すべて防ぐ
-    for (let i = 0; i < b.members.length && !st.won; i++) {
+    let guardAll = null;     // 相手の攻撃を、すべて防ぐ技（強いモードのパパの「におう立ち」など）
+    const powerUp = {};      // このターンだけの攻撃の倍率（boost の技。仲間 → 倍率）
+    const picked = (i) => (b.members[i].commands.length ? toArray(picks)[i] : null);
+    const first = (i) => Boolean(picked(i) && MV[picked(i)] && MV[picked(i)].first);
+    const order = b.members.map((m, i) => i);
+    const turnOrder = [...order.filter(first), ...order.filter((i) => !first(i))];
+    for (let k = 0; k < turnOrder.length && !st.won; k++) {
+      const i = turnOrder[k];
       const m = b.members[i];
-      const id = m.commands.length ? toArray(picks)[i] : pickTactic(m, st);
+      const id = m.commands.length ? picked(i) : pickTactic(m, st);
       const mv = id ? MV[id] : null;
       const charge = st.charged[m.who] || 0;
       delete st.charged[m.who];   // ためた力は、次に動いたときに使う（攻撃でなければ消える）
@@ -2227,7 +2261,15 @@
       const power = Math.max(0, Number(mv.power) || 0);
       const parts = [];
       const add = (text, extra) => { if (!quiet && text) parts.push(Object.assign({ text, st: snap(), actor: m.who }, extra)); };
-      const v = quiet ? null : vars({ who: whoName(m.who), move: fill(mv.name || id) });
+      const v = quiet ? null : vars({ who: whoName(m.who), move: moveName(id), n: power });
+      // fail：ときどき、技の代わりに何もしない（強いモードのパパの「スマホに夢中」。rate は起こる割合）
+      if (mv.fail && typeof mv.fail === "object" && luck() < Number(mv.fail.rate)) {
+        if (!quiet) {
+          for (const ln of btLines(mv.fail.text, v)) add(ln);
+          act(parts);
+        }
+        continue;
+      }
       if (!quiet) {
         // 技の音（MOVES の sound）は、技の名前の文といっしょに鳴らす（数値を変えても、同じ技なら同じ音）
         add(mv.text ? btText(mv.text, v) : T("battleUse", v), { fx: mv.ribbon ? "ribbon" : "", sound: mv.sound || "" });
@@ -2238,13 +2280,15 @@
       if (mv.kind === "attack") {
         const weak = b.weak.includes(mv.type);
         // finish（決め技）は、残りのハートを全部へらす。ほかの技では、相手の最後の last 個のハートはへらせない（よけられる）
+        const up = mv.finish ? 1 : powerUp[m.who] || 1;   // このターンだけの倍率（boost）
         const dmg = mv.finish ? st.foe
-          : (power + st.cheer) * Math.max(1, Number(mv.hits) || 1) * (weak ? 2 : 1) * times * (charge || 1);
+          : (power + st.cheer) * Math.max(1, Number(mv.hits) || 1) * (weak ? 2 : 1) * times * (charge || 1) * up;
         const dealt = Math.max(0, Math.min(dmg, st.foe - (mv.finish ? 0 : Math.min(st.foe, b.last))));
         st.foe -= dealt;
         if (!quiet) {
           if (dealt > 0 || dmg <= 0) {
             if (charge > 1) add(T("battleCharged", { n: charge }));
+            if (up > 1) add(T("battlePowered", { n: up }));
             if (weak) add(T("battleWeak"));
             add(T("battleFoeDamage", vars({ n: dealt })), { fx: st.foe > 0 ? "hit" : "" });
           } else {
@@ -2270,11 +2314,17 @@
         st.cheerLeft = Math.max(1, Number(mv.turns) || 1);
         if (!quiet) add(T("battleCheer", { n: st.cheerLeft }), { fx: "cheer" });
       } else if (mv.kind === "help") {
-        const next = b.members.slice(i + 1).find((x) => x.commands.length || x.tactics.length);
+        // てだすけ：次に動く仲間（このターンの動く順で）の技を強くする
+        const next = turnOrder.slice(k + 1).map((x) => b.members[x]).find((x) => x.commands.length || x.tactics.length);
         if (next) boost = Math.max(2, power);
         if (!quiet) add(next ? T("battleHelp", { target: whoName(next.who), n: boost }) : T("battleHelpNone"), next ? { target: next.who, fx: "help" } : {});
+      } else if (mv.kind === "boost") {
+        // このターンだけ、target（主人公）の攻撃を power 倍にする（強いモードのパパ。first と組み合わせると、かならず間に合う）
+        const target = b.members.some((x) => x.who === mv.target) ? mv.target : null;
+        if (target) powerUp[target] = (powerUp[target] || 1) * Math.max(1, power);
+        if (!quiet && !toArray(mv.say).length) add(target ? T("battlePower", { target: whoName(target), n: Math.max(1, power) }) : T("battleHelpNone"));
       } else if (mv.kind === "guard") {
-        if (mv.all) guardAll = true;
+        if (mv.all) guardAll = mv;
         else guardBig = mv;
         if (!quiet && !toArray(mv.say).length) add(T("battleGuard"));
       } else if (mv.kind === "charge") {
@@ -2295,7 +2345,12 @@
         if (!quiet && a.text) add(btText(a.text, v), { sound: a.sound || "" });
         const dmg = Math.max(0, Math.floor(Number(a.damage) || 0));
         if (dmg > 0 && (guardAll || (guardBig && a.big))) {
-          if (!quiet) add(a.blocked ? btText(a.blocked, v) : T("battleBlocked"), { fx: "guard" });
+          // 防いだときの文：大技を「かまくら」などで防いだら、相手の行動の blocked。すべて防ぐ技なら、その技の blocked
+          const byBig = Boolean(guardBig && a.big);
+          const text = byBig && a.blocked ? btText(a.blocked, v)
+            : !byBig && guardAll.blocked ? btText(guardAll.blocked, v)
+              : T("battleBlocked");
+          if (!quiet) add(text, { fx: "guard" });
         } else if (dmg > 0) {
           // 防ぐ技を使ったのに、大技ではないので防げなかったときは、その理由（技の miss）を出す
           if (!quiet && guardBig) for (const ln of btLines(guardBig.miss, v)) add(ln);
@@ -2375,7 +2430,9 @@
   //            spam：全員が「いちばん強い攻撃」だけを選んだときの結果（{ win: true, turn: 3 } など）,
   //            guard：大技（big）が来るターンだけ防ぐ技を選び、ほかは「いちばん強い攻撃」を選んだときの結果
   //                   （防ぐ技を持つ仲間がいないときは null） }
-  function battleCheck(id, team, limit = 12) {
+  //   rand：技の fail（強いモードのパパの「スマホに夢中」）に使う数。書かなければ、いつも起こらないものとして調べる
+  //         （() => 0 なら、いつも起こるものとして調べる）
+  function battleCheck(id, team, limit = 12, rand) {
     const out = { win: 0, path: [], lose: 0, spam: null, guard: null };
     const b = battleOf(id, team.on, team.pick);
     if (!b) return out;
@@ -2388,7 +2445,7 @@
       const next = [];
       for (const node of layer) {
         for (const picks of joint) {
-          const r = battleTurn(b, node.st, picks, true);
+          const r = battleTurn(b, node.st, picks, true, rand);
           if (r.state.won) {
             if (!out.win) { out.win = n; out.path = [...node.path, picks]; }
             continue;
@@ -2409,7 +2466,7 @@
     const strong = b.members.map((m) => (m.commands.length ? m.commands.slice().sort((x, y) => attackValue(b, y) - attackValue(b, x))[0] : null));
     let s = battleStart(b);
     for (let n = 1; n <= limit; n++) {
-      s = battleTurn(b, s, strong, true).state;
+      s = battleTurn(b, s, strong, true, rand).state;
       if (s.won || s.lost) { out.spam = { win: s.won, turn: n }; break; }
     }
     // 大技の予告があるターンだけ防ぐ（1-3 なら、ふぶきの前だけ かまくら）。ほかは いちばん強い攻撃
@@ -2418,7 +2475,7 @@
       s = battleStart(b);
       for (let n = 1; n <= limit; n++) {
         const a = battleAction(b, s.turn);
-        s = battleTurn(b, s, strong.map((c, k) => (a && a.big && guards[k] ? guards[k] : c)), true).state;
+        s = battleTurn(b, s, strong.map((c, k) => (a && a.big && guards[k] ? guards[k] : c)), true, rand).state;
         if (s.won || s.lost) { out.guard = { win: s.won, turn: n }; break; }
       }
     }
@@ -2426,7 +2483,8 @@
   }
 
   // でたらめにコマンドを選んだとき、limit ターン以内に勝てる割合（%）。テスト用メニューの点検だけで使う
-  //   毎回同じ結果になるように、決まった順番の数（疑似乱数）で選ぶ（ゲームの中では乱数を使わない）
+  //   毎回同じ結果になるように、決まった順番の数（疑似乱数）で選ぶ（ゲームの中では、技の fail のほかは乱数を使わない）
+  //   技の fail（スマホに夢中）も、同じ数で起こす
   function battleRandom(id, team, trials = 400, limit = 15) {
     const b = battleOf(id, team.on, team.pick);
     if (!b) return 0;
@@ -2437,7 +2495,7 @@
       let s = battleStart(b);
       for (let n = 1; n <= limit; n++) {
         const picks = b.members.map((m) => (m.commands.length ? m.commands[Math.floor(rnd() * m.commands.length)] : null));
-        s = battleTurn(b, s, picks, true).state;
+        s = battleTurn(b, s, picks, true, rnd).state;
         if (s.won) { wins += 1; break; }
         if (s.lost) break;
       }
@@ -3294,7 +3352,8 @@
     state.atEnd = false;
     BACKLOG.length = 0;   // バックログは、今の場面で出た文だけ
     // 遊び直し（なかまの場面へ）で、いちばん先まで進んだ所に追いついたら、ふつうの記録にもどす
-    if (state.main && sceneOrder(id) >= sceneOrder(state.main.scene)) state.main = null;
+    //   おたのしみの場面（data.js の bonus: true。強いモード）では、追いついたことにしない（「つづきから」の場所を変えない）
+    if (state.main && !sc.bonus && sceneOrder(id) >= sceneOrder(state.main.scene)) state.main = null;
     state.chapter = sc.chapter || (jump ? inherited(id, "chapter") : state.chapter);
     state.bg = sc.bg || (jump ? inherited(id, "bg") : state.bg);
     applyMeet(sc);
@@ -3793,13 +3852,31 @@
   function openBonus(st) {
     const again = () => openBonus(st);
     const canReplay = replayRows(st).some((r) => r.done);
+    const hard = bonusHard();
     openOverlay(el("div", { class: "panel bonus-panel" },
       el("h2", { text: T("bonusTitle") }),
       el("p", { class: "panel-note pre", text: T("bonusNote") }),
       el("div", { class: "bonus-menu" },
         canReplay ? el("button", { class: "btn", type: "button", text: T("bonusReplay"), onclick: () => openReplay(st, again) }) : null,
+        hard ? el("button", { class: "btn", type: "button", text: T("bonusHard"), onclick: startHard }) : null,
         el("button", { class: "btn", type: "button", text: T("bonusGallery"), onclick: () => openGallery(again) })),
       el("button", { class: "btn primary", type: "button", text: T("close"), onclick: closeOverlay })));
+  }
+
+  // 雪だるま戦・強いモード（data.js の BONUS の hard）：始める場面（bonus: true の場面）。書いていなければ null
+  const bonusHard = () => (BN.hard && SCN[BN.hard.scene] ? BN.hard : null);
+  //   なかまの場面へと同じように、いちばん先まで進んだ所を覚えてから始める（「つづきから」は、その所から）
+  //   仲間（友達とパパ）の条件は、始める場面の unset で消す（data.js）
+  function startHard() {
+    const h = bonusHard();
+    if (!h) return;
+    // タイトル画面から選んだときは、この端末に保存した記録で始める
+    if (currentView === "title") loadState(storage.load());
+    if (!state.main && state.scene && SCN[state.scene] && !SCN[state.scene].bonus) state.main = mainOf(state);
+    state.atEnd = false;
+    state.walk = null;   // 歩けるマップは、場面の最初の場所から
+    currentView = "";
+    runScene(h.scene, true);
   }
 
   // 回想ギャラリー：BONUS の gallery の絵のうち、見つかったものだけを並べる（PCで直接開いたときだけ探す）
@@ -4162,7 +4239,7 @@
     "menuTitle", "menuParty", "menuMap", "menuHouseMap", "menuToTitle", "menuNote",
     "menuReplay", "titleReplay", "replayTitle", "replayNote", "replayLocked",
     "logButton", "logHelp", "logTitle", "logNote", "logEmpty", "logPicked",
-    "replayBack", "titleBonus", "bonusTitle", "bonusNote", "bonusReplay", "bonusGallery",
+    "replayBack", "titleBonus", "bonusTitle", "bonusNote", "bonusReplay", "bonusHard", "bonusGallery", "battlePower", "battlePowered",
     "galleryTitle", "galleryNote", "galleryLoading", "galleryEmpty", "galleryCount", "galleryPrev", "galleryNext", "galleryList",
     "mapTitle", "mapCaption", "explore", "roomDone", "darkDefault", "darkShine",
     "houseMapTitle", "houseMapCaption", "houseStarTemp",
@@ -4516,6 +4593,18 @@
       else check(r.scene, at);
       checkText(r.label, `${at} の label`);
     });
+    // クリア後のおたのしみ（BONUS）：強いモードの始める場面
+    for (const [id, sc] of Object.entries(SCN)) {
+      if (sc && sc.bonus !== undefined && typeof sc.bonus !== "boolean") errors.push(`場面「${id}」の bonus は、true か false にしてください。`);
+    }
+    if (BN.hard !== undefined) {
+      const h = BN.hard;
+      if (!h || typeof h !== "object" || !h.scene) errors.push("BONUS の hard は、{ scene: \"hard_start\" } のように、始める場面を書いてください。");
+      else {
+        check(h.scene, "BONUS の hard の scene");
+        if (SCN[h.scene] && !SCN[h.scene].bonus) warnings.push(`BONUS の hard の scene：場面「${h.scene}」に bonus: true がないので、遊ぶと「つづきから」の場所が変わるかもしれません。`);
+      }
+    }
     // クリア後のおたのしみ（BONUS）：最終章を終えた記録を残す場面と、回想ギャラリーの絵
     if (!Object.values(SCN).some((sc) => sc && sc.end && sc.end.complete === true)) {
       warnings.push("end に complete: true を書いた場面がないので、最終章を終えた記録が残らず、タイトル画面に「おたのしみ」が出ません。");
@@ -4775,7 +4864,7 @@
   const condLabel = (conds) => conds.map((f) => (CHARS[f] ? charName(CHARS[f]) : f)).join("・");
 
   // 戦いの点検（data.js の BATTLES・MOVES）：書きまちがいと、勝てるかどうか
-  const MOVE_KINDS = ["attack", "help", "cheer", "heal", "guard", "charge"];
+  const MOVE_KINDS = ["attack", "help", "cheer", "heal", "guard", "charge", "boost"];
   function checkBattles(errors, warnings, check, checkLines, checkSound) {
     const used = new Set(Object.values(SCN).filter((sc) => sc && sc.battle).map((sc) => sc.battle));
     for (const [id, def] of Object.entries(BT)) {
@@ -4806,8 +4895,8 @@
         if (!toArray(m.commands).length && !toArray(m.tactics).length) warnings.push(`${where}（${charName(CHARS[m.who])}）には commands も tactics もないので、戦いでは動きません。`);
       });
       const choose = Number(def.choose) || 0;
-      const others = battleParty(def).filter((p) => p.who !== def.leader);
-      if (choose && choose > others.length) errors.push(`${at} の choose（えらぶ人数）が、party の仲間の数（${others.length}人）より多いです。`);
+      const others = battleParty(def).filter((p) => p.who !== def.leader && (p.if != null || p.unless != null));
+      if (choose && choose > others.length) errors.push(`${at} の choose（えらぶ人数）が、party の条件（if）のある仲間の数（${others.length}人）より多いです。`);
       const e = def.enemy;
       if (!e || typeof e !== "object") {
         errors.push(`${at} に enemy（相手）がありません。`);
@@ -4843,10 +4932,18 @@
         checkLines(def.skip.reply, `${at} の skip の reply`);
       }
       // どう選んでも勝てない戦いになっていないか（仲間をえらぶ戦いは、えらび方を全部）
-      for (const team of battleTeams(id)) {
-        if (battleCheck(id, team).win) continue;
-        errors.push(`${at}：この戦いは、どう選んでも勝てません${team.label ? `（${team.label}）` : ""}。数値や技を見直してください。`);
+      //   強いモード（hard: true）は、勝てない仲間の組み合わせがあってもよい。どの組み合わせでも勝てないときだけ知らせる
+      const teams = battleTeams(id);
+      const wins = teams.map((team) => battleCheck(id, team).win);
+      if (def.hard) {
+        if (teams.length && !wins.some(Boolean)) errors.push(`${at}：この戦いは、どの仲間の組み合わせでも勝てません。数値や技を見直してください。`);
+      } else {
+        teams.forEach((team, k) => {
+          if (wins[k]) return;
+          errors.push(`${at}：この戦いは、どう選んでも勝てません${team.label ? `（${team.label}）` : ""}。数値や技を見直してください。`);
+        });
       }
+      if (def.hard !== undefined && typeof def.hard !== "boolean") errors.push(`${at} の hard は、true か false にしてください。`);
     }
     for (const [id, mv] of Object.entries(MV)) {
       const at = `MOVES の「${id}」`;
@@ -4859,7 +4956,19 @@
       checkLines(mv.text, `${at} の text`, BATTLE_VARS);
       checkLines(mv.say, `${at} の say`, BATTLE_VARS);
       checkLines(mv.miss, `${at} の miss`, BATTLE_VARS);
+      checkLines(mv.blocked, `${at} の blocked`, BATTLE_VARS);
       checkSound(mv.sound, `${at} の sound`, false);
+      // 強いモード（パパ）の技：このターンの最初に動く（first）・主人公を強くする（boost の target）・
+      //   ときどき何もしない（fail）・呼び名がないときの技の名前（noCall）
+      if (mv.first !== undefined && typeof mv.first !== "boolean") errors.push(`${at} の first は、true か false にしてください。`);
+      if (mv.kind === "boost" && !CHARS[mv.target]) errors.push(`${at} の target：「${mv.target}」というキャラクターがいません（boost で強くする仲間。例："hero"）。`);
+      if (mv.fail !== undefined) {
+        const f = mv.fail;
+        if (!f || typeof f !== "object" || !(Number(f.rate) >= 0 && Number(f.rate) <= 1)) errors.push(`${at} の fail は、{ rate: 1 / 3, text: "…" } の形で書いてください（rate は 0 から 1 までの数）。`);
+        else checkLines(f.text, `${at} の fail の text`, BATTLE_VARS);
+      }
+      if (mv.noCall !== undefined) checkLines(mv.noCall, `${at} の noCall`, BATTLE_VARS);
+      if (String(mv.name || "").includes("{call}") && mv.noCall === undefined) warnings.push(`${at}：name に {call} があるときは、呼び名がないときの名前（noCall）も書いてください（今は {call} を {name} にして出します）。`);
     }
   }
 
@@ -5089,19 +5198,26 @@
 
   // 戦いの点検（コマンドの選び方を全部ためして、何ターンで勝てるか・負けるかを調べた結果）
   //   仲間をえらぶ戦いは、えらび方ごとに1行。「攻撃だけ」は、全員がいちばん強い攻撃だけを選んだとき
+  //   強いモード（hard: true）は、仲間の組み合わせ（4人から3人の4通り）ごとに1行。勝てない組み合わせがあってもよい
+  //   技の fail（パパの「スマホに夢中」）がある組み合わせは、最短を「起こらないとき」で数え、「毎回起こるとき」も出す
   function battleTool() {
     const rows = [];
     for (const [sid, sc] of Object.entries(SCN)) {
       if (!sc || !sc.battle || !BT[sc.battle]) continue;
+      const def = BT[sc.battle];
       for (const team of battleTeams(sc.battle)) {
         const r = battleCheck(sc.battle, team);
         const rate = battleRandom(sc.battle, team);
-        const how = r.path.map((picks) => picks.filter(Boolean).map((c) => fill((MV[c] && MV[c].name) || c)).join("・")).join(" → ");
+        const bt = battleOf(sc.battle, team.on, team.pick);
+        const luck = Boolean(bt) && bt.members.some((m) => m.commands.some((c) => MV[c] && MV[c].fail));
+        const bad = luck ? battleCheck(sc.battle, team, 12, () => 0) : null;
+        const how = r.path.map((picks) => picks.filter(Boolean).map(moveName).join("・")).join(" → ");
         const result = (x) => (!x ? "決着がつかない" : x.win ? `${x.turn}ターンで勝つ` : `${x.turn}ターン目に負ける`);
         rows.push(el("li", {
-          class: r.win ? "" : "debug-error",
-          text: `${sid}（${sc.battle}）${team.label ? `［${team.label}］` : ""}：`
-            + `${r.win ? `最短${r.win}ターンで勝てる` : "勝てない"}`
+          class: r.win ? "" : def.hard ? "debug-warn" : "debug-error",
+          text: `${sid}（${sc.battle}）${def.hard ? "［強いモード］" : ""}${team.label ? `［${team.label}］` : ""}：`
+            + `${r.win ? `最短${r.win}ターンで勝てる${luck ? "（スマホに夢中にならなければ）" : ""}` : "勝てない"}`
+            + `${bad ? `／スマホに夢中が毎回だと${bad.win ? `最短${bad.win}ターン` : "勝てない"}` : ""}`
             + `／攻撃だけだと${result(r.spam)}`
             + `${r.guard ? `／大技の予告のときだけ防ぎ、あとは攻撃だと${result(r.guard)}` : ""}`
             + `／でたらめに選ぶと、15ターン以内に勝てるのは約${rate}%`,
@@ -5156,6 +5272,7 @@
     loadNames().then(({ list, status }) => {
       nameInfo.textContent = status === "ok"
         ? `名前の一覧（name.js）：読みこめた（名前 ${list.counts.names}つ・名字 ${list.counts.family}つ）。1-1で名前を確認します。`
+          + `パパの呼び名（call）：${nameCall() ? "ある（強いモードの技の名前に使う）" : "ない（技の名前は「名前ーっ！」になる）"}。`
         : status === "empty"
           ? "名前の一覧（name.js）：ファイルはあるが、NAME_LIST の names が読めない（書きまちがいかもしれません。name.sample.js と見くらべてください）。名前は確認せずに進みます。"
           : `名前の一覧（name.js）：${ART_DIR}/name.js が見つからない。名前は確認せずに進みます。`;
@@ -5300,7 +5417,9 @@
   const problems = validate();
   updateParty();
   // 名前の確認（1-1）の一覧は、先に読みこみはじめておく（PCで直接開いたときだけ。ないときは確認しない）
-  if (ART_DIR && Object.values(SCN).some((sc) => sc && sc.input && sc.input.check)) loadNames();
+  //   強いモード（おたのしみ）のパパの技の名前（{call}）にも使う
+  if (ART_DIR && (Object.values(SCN).some((sc) => sc && sc.input && sc.input.check)
+    || Object.values(MV).some((mv) => mv && String(mv.name || "").includes("{call}")))) loadNames();
   showProblems(problems.errors);
   if (DEBUG) setupDebug(problems);
   if (!handleUrlKey()) showTitle();

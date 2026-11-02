@@ -73,6 +73,7 @@
 //              「気配を探す」ボタンを出し、位置を測って、結果のイーブイの文を出す。
 //              必要な数の公園で見つけたら「つづける ▶」で next へ進む。中身は leafeon_search を参照
 //    parkReset : true にすると、その場面に入ったときに、公園で見つけた記録を空にする（3-0 の out_start）
+//    bonus   : true にすると、クリア後のおたのしみの場面（強いモード）。遊んでも「つづきから」の場所を変えない
 //
 //  【音とエフェクト】（設計書 第13節。くわしくは README の「音とエフェクト」）
 //    { text: "グレイシア：……", sound: "ice" }  → その行を出すときに、音を鳴らす（文はそのまま）
@@ -263,6 +264,9 @@ const CHARACTERS = {
   friend1:   { name: "{friend1}", emoji: "🧑", color: "#8fb4e8" },   // 技：ピンポンアタック
   friend2:   { name: "{friend2}", emoji: "🧑", color: "#eea98d" },   // 技：ぶんぶんハローYouTube
   friend3:   { name: "{friend3}", emoji: "🧑", color: "#9fd6a2" },   // 技：ベンチホテル
+
+  // クリア後のおたのしみ（強いモード）だけで、1-3 の花畑に立つ。話しかけると仲間になる
+  papa:      { name: "パパ",         emoji: "👨", color: "#a7b8d8" },
 
   // 1-1 の森：イーブイがかくれている茂み（歩けるマップで調べると、イーブイとの会話が始まる）
   bush:      { name: "茂み",         emoji: "🌿", color: "#8cc46f" },
@@ -1906,6 +1910,160 @@ const SCENES = {
       ],
     },
   },
+
+  // ============ クリア後のおたのしみ（PCのみ。設計書 第11節） ============
+  //  タイトル画面の「おたのしみ」から始める場面です（下の BONUS の hard）。bonus: true の場面は、
+  //  遊んでも「つづきから」の場所（いちばん先まで進んだ所）を変えません。
+
+  // ---- 雪だるま戦・強いモード ----
+  //  1-3 の花畑で仲間を3人えらび、数値を上げた雪だるま兄弟と2回戦う（BATTLES の littleHard・mergedHard）。
+  //  仲間にできるのは、友達3人とパパの4人のうち3人（主人公と合わせて4人で戦う。戦いの画面の枠は4人のまま）。
+  //  3人そろったあとに4人目に話しかけると、「今日は応援してるね」と言って加わらない。
+  //  組み直すときは、強いモードを最初からやり直す（はじめの場面の unset で、仲間の条件を消す）。
+  //  セリフは【仮】です。
+  hard_start: {
+    chapter: "おたのしみ　雪だるま戦・強いモード",
+    bg: "memory",
+    bgm: "dream",
+    bonus: true,
+    unset: ["friend1", "friend2", "friend3", "papa"],   // 仲間を、はじめからえらび直す
+    walk: "living",
+    start: [7, 6, "up"],
+    frost: [0, 0, 5, 5],
+    lines: [
+      "ニンフィア：また来てくれたの？　雪だるま兄弟が、もっと強くなって帰ってきちゃった！",
+      "ニンフィア：一緒に行けるのは、3人まで。今日は、だれと行く？",
+    ],
+    goal: "仲間を3人えらんで、ニンフィアに話しかけよう。",
+    team: [
+      { who: "friend1", if: "friend1" },
+      { who: "friend2", if: "friend2" },
+      { who: "friend3", if: "friend3" },
+      { who: "papa", if: "papa" },
+    ],
+    events: [
+      // ニンフィア：3人そろったら、戦いに行くか聞く
+      {
+        npc: "sylveon", at: [6, 5], need: 3,
+        say: ["ニンフィア：仲間がそろったね！　強くなった雪だるまを、追い返しに行く？"],
+        choices: [
+          { text: "行く", reply: "ニンフィア：よーし、行こう！", next: "hard_snow" },
+          { text: "もう少し花畑を見てまわる", reply: "ニンフィア：分かった。準備ができたら、声をかけてね。" },
+        ],
+      },
+      { npc: "sylveon", at: [6, 5], say: ["ニンフィア：仲間を3人えらんでね。大きな岩のそばの子たちと……", "ニンフィア：あれ？　茂みのそばにも、だれかいるみたい。"] },
+
+      // 友達（1-3 と同じ誘い方）。3人そろったあとは「今日は応援してるね」と言って、加わらない
+      { npc: "friend1", at: [12, 0], unless: "friend1", need: 3, say: ["{friend1}：今日は応援してるね！"] },
+      {
+        npc: "friend1", at: [12, 0], unless: "friend1",
+        say: ["{friend1}：一緒に遊ぼうぜ"],
+        choices: [
+          { text: "はい", reply: ["{friend1}：第4公園集合で", "{friend1}が仲間になった！"], set: "friend1" },
+          { text: "いいえ", reply: "{friend1}：えー、つまんねーの。" },
+        ],
+      },
+      { npc: "friend2", at: [13, 3], unless: "friend2", need: 3, say: ["{friend2}：今日は応援してるね！"] },
+      {
+        npc: "friend2", at: [13, 3], unless: "friend2",
+        say: ["イーブイ：雪だるまが、また花畑をこおらせに来たんだ。", "{friend2}：ゆるせる？"],
+        choices: [
+          { text: "はい", reply: "{friend2}：えっ、ゆるせちゃうの？　やさしいなあ。" },
+          { text: "いいえ", reply: ["{friend2}：ゆるせんのぉ、ゆるせんのぉ", "{friend2}が仲間になった！"], set: "friend2" },
+        ],
+      },
+      { npc: "friend3", at: [13, 1], unless: "friend3", need: 3, say: ["{friend3}：今日は応援してるね！"] },
+      {
+        npc: "friend3", at: [13, 1], unless: "friend3",
+        say: ["{friend3}：野宿する？"],
+        choices: [
+          { text: "はい", reply: ["{friend3}：野宿確定", "{friend3}が仲間になった！"], set: "friend3" },
+          { text: "いいえ", reply: "{friend3}：そっかー。気が向いたら言ってね。" },
+        ],
+      },
+      // パパ（強いモードだけ）。話しかけると仲間になる
+      { npc: "papa", at: [1, 3], unless: "papa", need: 3, say: ["パパ：今日は応援してるね！"] },
+      { npc: "papa", at: [1, 3], unless: "papa", say: ["パパ：おっ、雪だるま退治か？　パパも行くぞ！", "パパが仲間になった！"], set: "papa" },
+
+      // 花畑の住人（戦いのヒント）
+      { npc: "bee", at: [7, 4], say: ["ミツバチ：あの兄弟、前よりずっと強くなってるよ。"] },
+      { npc: "ladybug", at: [0, 6], say: ["テントウムシ：雪だるまが大きく息をすいこんだら、ふぶきの合図だよ。"] },
+      { npc: "butterfly", at: [13, 6], say: ["チョウチョ：だれと行くかで、戦い方が変わりそうだね。"] },
+
+      // 出入口
+      { door: "path", say: ["門が、白くこおりついている。押しても開かない。"] },
+      { door: "washitsu", say: ["イーブイ：洞窟には、もどらなくて大丈夫。"] },
+    ],
+  },
+
+  hard_snow: {
+    bg: "memory",
+    bgm: "dream",
+    bonus: true,
+    lines: [
+      "そのとき、花畑の向こうから、ひとまわり大きな雪だるまが2つ転がってきた！",
+      "雪だるま弟：今日のぼくたちは、ひと味ちがうぞー！",
+      "ニンフィア：お兄ちゃんのほうは、わたしとイーブイで引きつけるね！　弟くんをお願い！",
+      "ニンフィアとイーブイは、雪だるま兄を引きつけて、花畑の向こうへ走っていった。",
+    ],
+    next: "hard_battle",
+  },
+
+  // 弟戦（強いモード）：主人公と、えらんだ3人。BATTLES の littleHard
+  hard_battle: {
+    bg: "memory",
+    bgm: "battle",
+    bonus: true,
+    battle: "littleHard",
+    lines: ["強くなった雪だるま弟が、こちらへ転がってくる！"],
+    next: "hard_merge",
+  },
+
+  hard_merge: {
+    bg: "memory",
+    bgm: "battle",
+    bonus: true,
+    show: ["snowLittle", "sylveon", "eevee"],
+    lines: [
+      "雪だるま弟：うわーん、兄ちゃーん！",
+      "ニンフィア：ごめん、押し返しきれなかった！　お兄ちゃんのほうも、前より強いの！",
+    ],
+    next: "hard_battle2",
+  },
+
+  // 合体戦（強いモード）：イーブイ・主人公・えらんだ3人・ニンフィア。BATTLES の mergedHard
+  hard_battle2: {
+    bg: "memory",
+    bgm: "battle",
+    bonus: true,
+    battle: "mergedHard",
+    lines: [
+      { text: "雪だるま兄弟は、ころころと転がって、ひとつに重なった！", sound: "roll" },
+      "合体雪だるま：今日の合体は、もっと大きいぞー！",
+      "イーブイ：{name}、ぼくが てだすけするよ！",
+    ],
+    next: "hard_win",
+  },
+
+  // 強いモードに勝つ：終わりの画面から、もう一度（仲間を組み直す）か、タイトルへ
+  hard_win: {
+    bg: "memory",
+    bgm: "dream",
+    bonus: true,
+    lines: [
+      "合体がとけて、雪だるま兄弟は、元の2つにもどった。",
+      "雪だるま兄：まいった！　強くなっても、かなわないや……。",
+      "ニンフィア：すごい！　強くなった雪だるまにも勝っちゃった！",
+    ],
+    end: {
+      icon: "⛄",
+      bg: "memory",
+      title: "強いモード　クリア！",
+      text: "強くなった雪だるま兄弟に勝った！\nほかの仲間とも、挑戦してみよう。",
+      next: "hard_start",
+      nextLabel: "もう一度（仲間をえらび直す）",
+    },
+  },
 };
 
 
@@ -1933,7 +2091,8 @@ const SCENES = {
 //    title    : 画面の左上に出す名前
 //    hearts   : みんなのハートの数
 //    leader   : かならず戦うキャラ（主人公）
-//    choose   : leader のほかに、戦う仲間を何人えらぶか（仲間になった人から。今は使っていない）
+//    choose   : leader のほかに、戦う仲間を何人えらぶか（party のうち、条件 if のある仲間から。強いモードで使う）
+//               条件のない仲間（強いモードの合体戦のイーブイ・ニンフィア）は、えらばずに、いつも戦う
 //    party    : 戦う仲間（上から順に動く）
 //               { who: 仲間, commands: [技, …], if: 仲間になった印（set で記録した名前。なくてもよい） }
 //               commands のかわりに tactics（さくせん）を書くと、自動で動く（下の tactics）
@@ -1957,6 +2116,7 @@ const SCENES = {
 //    hints    : 戦っている間のヒント。turn ターン目の始めに出す（最後のヒントは、そのあとも2ターンごとにくり返す）
 //    lose     : 負けたときのヒント（負けるたびに1つずつ。最後のものは何度でも）
 //    skip     : after 回負けると出す、あきらめるボタン（氷の床の skip と同じ書き方）
+//    hard     : true で、強いモード（おたのしみ）。仲間の組み合わせによっては勝てなくてもよい（点検でエラーにしない）
 //
 //  ※ 文の中の {who} は技を使った人、{enemy} は相手、{name} などは、いつもどおり置きかわります。
 
@@ -1969,7 +2129,14 @@ const SCENES = {
 //            "guard"  … このターンの、相手の大技（actions の big）を防ぐ。all: true なら、すべて防ぐ
 //            "charge" … 次のターン、その仲間の攻撃が power 倍になる（攻撃以外をすると、消える）
 //            "help"   … 次に動く仲間の技を power 倍にする（てだすけ）
+//            "boost"  … このターンだけ、target の仲間の攻撃を power 倍にする（強いモードのパパ。target は "hero" など）
 //    finish: true の攻撃は決め技。相手の残りのハートを全部へらす（相手の last のハートもへらせる）
+//    first : true の技は、このターンの最初に動く（選んだ仲間が、party の順番より先に動く）
+//    fail  : { rate, text }。rate の割合で、技の代わりに text を出して、何もしない（強いモードのパパの「スマホに夢中」）。
+//            rate は 0〜1（1 / 3 なら、3回に1回くらい）。ゲームで乱数を使うのは、この fail だけ
+//    blocked : すべて防ぐ技（guard の all: true）で、相手の攻撃を防いだときの文（書かなければ「でも、ダメージを防いだ！」）
+//    name の {call} : pc-images/name.js の call（呼び名）。PCで直接開いたときだけ読める。
+//                    呼び名がないときは、noCall を技の名前にする（強いモードのパパの「○○ちゃーん」）
 //    type  : 攻撃のタイプ（相手の weak と比べる）
 //    note  : コマンドのボタンに出す、短い説明
 //    text  : 技を使ったときの文（書かなければ「〇〇の 技の名前！」）
@@ -1998,6 +2165,25 @@ const MOVES = {
     name: "リボン", kind: "attack", finish: true, ribbon: true,
     text: "ニンフィアのリボンが、{enemy}を つかまえた！",
     say: ["ニンフィア：止まった！　今だよ。みんな、手をつないで！", "ニンフィア：リボンで、みんなをつなぐよ。せーのっ！"],
+  },
+
+  // ---- パパ（クリア後のおたのしみ・強いモードだけ）【仮】 ----
+  //  息子さんの名前と呼び名は、ここに書かない（効果の文は {name}。技の名前の呼び名は、PCだけの pc-images/name.js の call）
+  //  技1：そのターンだけ、主人公の攻撃が power 倍（かならず効く）。first: true で、そのターンの最初に動く
+  papaCall: {
+    name: "{call}ちゃーん",   // {call}：pc-images/name.js の call（呼び名）
+    noCall: "{name}ーっ！",   // 呼び名がないとき（name.js がない・call を書いていない・公開ページ）の技の名前
+    kind: "boost", target: "hero", power: 5, first: true,
+    say: ["{name}の攻撃が、このターンだけ{n}倍になる！"],
+    note: "このターンだけ、{name}の攻撃が5倍",
+  },
+  //  技2：そのターンだけ、みんなが受けるダメージを0にする。3回に1回くらい、スマホに夢中になって何もしない（fail）
+  niou: {
+    name: "におう立ち", kind: "guard", all: true,
+    say: ["パパが、みんなの前で におう立ちした！"],
+    blocked: "パパが、みんなを守った！　ダメージは0だ！",
+    fail: { rate: 1 / 3, text: "{who}は、スマホに夢中になって動かない……！" },
+    note: "このターンのダメージを0にする（ときどき、スマホに夢中）",
   },
 };
 
@@ -2119,6 +2305,110 @@ const BATTLES = {
       next: "sylveon_win",
     },
   },
+
+  // ---- 強いモード（クリア後のおたのしみ。PCのみ）：数値を上げた弟戦と合体戦【仮】 ----
+  //  仲間は、花畑で仲間になった3人（友達3人とパパの4人から3人）。主人公と合わせて4人で戦う（choose: 3）。
+  //  hard: true … 仲間の組み合わせによっては勝てなくてもよい（?debug の「戦いの点検」に、組み合わせ4通りを出す）
+  //  負けが続いたら、仲間を組み直すボタン（強いモードを最初から。skip）
+  littleHard: {
+    title: "VS 雪だるま弟（強いモード）",
+    hard: true,
+    hearts: 6,
+    leader: "hero",
+    choose: 3,
+    party: [
+      { who: "hero", commands: ["snowball", "kamakura"] },
+      { who: "friend1", if: "friend1", commands: ["pingpong", "snowball"] },
+      { who: "friend2", if: "friend2", commands: ["hello", "snowball"] },
+      { who: "friend3", if: "friend3", commands: ["bench", "snowball"] },
+      { who: "papa", if: "papa", commands: ["papaCall", "niou"] },
+    ],
+    enemy: {
+      who: "snowLittle",
+      hearts: 24,
+      actions: [
+        { text: "雪だるま弟の 雪玉！", damage: 3, after: [{ text: "雪だるま弟は、大きく息をすいこんだ……！", sound: "inhale" }] },
+        {
+          text: "雪だるま弟の ふぶき！", damage: 9, big: true,
+          alert: "❄ このターンの終わりに、ふぶきが来る！",
+          blocked: "かまくらが、ふぶきを防いだ！",
+        },
+      ],
+      hitSay: ["雪だるま弟：へっへーん、今日のぼくは強いぞ！"],
+      break: ["雪だるま弟は、目を回して、ころんと転がった！"],
+    },
+    lose: [
+      ["ニンフィアの声：強い雪だるまは、雪玉もいたいよ。ハートが少なくなったら、気をつけて！"],
+      ["ニンフィアの声：ふぶきの前は、かまくらか、におう立ちで守ってね。"],
+    ],
+    skip: {
+      after: 2,
+      text: "仲間を組み直す（強いモードを、最初から）",
+      reply: ["ニンフィアの声：作戦を立て直そう！　花畑で、もう一度仲間をえらんでね。"],
+      next: "hard_start",
+    },
+  },
+
+  mergedHard: {
+    title: "VS 合体雪だるま（強いモード）",
+    hard: true,
+    hearts: 6,
+    leader: "hero",
+    choose: 3,
+    party: [
+      { who: "eevee", tactics: ["helpinghand"] },
+      { who: "hero", commands: ["snowball", "kamakura"] },
+      { who: "friend1", if: "friend1", commands: ["pingpong", "snowball"] },
+      { who: "friend2", if: "friend2", commands: ["hello", "snowball"] },
+      { who: "friend3", if: "friend3", commands: ["bench", "snowball"] },
+      { who: "papa", if: "papa", commands: ["papaCall", "niou"] },
+      { who: "sylveon", tactics: [{ move: "ribbon", foe: 3 }] },
+    ],
+    enemy: {
+      who: "snowMerged",
+      hearts: 50,
+      last: 3,
+      dodge: "でも、合体雪だるまは すばやく転がって、よけた！",
+      actions: [
+        { text: "合体雪だるまの 雪玉！", damage: 3, after: [{ text: "合体雪だるまは、大きく息をすいこんだ……！", sound: "inhale" }] },
+        {
+          text: "合体雪だるまの ふぶき！", damage: 10, big: true,
+          alert: "❄ このターンの終わりに、ふぶきが来る！",
+          blocked: "かまくらが、ふぶきを防いだ！",
+          after: ["合体雪だるまは、転がって、ひとまわり大きくなった！"],
+        },
+        { text: "合体雪だるまの 大きな雪玉！", damage: 4, after: [{ text: "合体雪だるまは、大きく息をすいこんだ……！", sound: "inhale" }] },
+        {
+          text: "合体雪だるまの ふぶき！", damage: 10, big: true,
+          alert: "❄ このターンの終わりに、ふぶきが来る！",
+          blocked: "かまくらが、ふぶきを防いだ！",
+          after: ["合体雪だるまは、転がって、どんどん大きくなっていく……！"],
+        },
+        {
+          text: "合体雪だるまの 特大の雪玉！", damage: 7,
+          alert: "⛄ このターンの終わりに、特大の雪玉が来る！",
+          after: [{ text: "合体雪だるまは、大きく息をすいこんだ……！", sound: "inhale" }],
+        },
+        {
+          text: "合体雪だるまの ふぶき！", damage: 10, big: true,
+          alert: "❄ このターンの終わりに、ふぶきが来る！",
+          blocked: "かまくらが、ふぶきを防いだ！",
+        },
+      ],
+      hitSay: ["ニンフィア：前より、ずっと速い……！　リボンでつかまえられるまで、がんばって！"],
+      break: ["みんなの力が、ひとつになって届いた！"],
+    },
+    lose: [
+      ["ニンフィア：息をすいこんだら、ふぶきの合図。守るのを忘れないで！"],
+      ["イーブイ：ぼくの てだすけで、{name}の雪玉は2倍になるよ！"],
+    ],
+    skip: {
+      after: 2,
+      text: "仲間を組み直す（強いモードを、最初から）",
+      reply: ["ニンフィア：作戦を立て直そう！　花畑で、もう一度仲間をえらんでね。"],
+      next: "hard_start",
+    },
+  },
 };
 
 
@@ -2189,11 +2479,14 @@ const REPLAY = [
 // ---------------- クリア後のおたのしみ（PCのみ。設計書 第11節） ----------------
 //  最終章を終えた記録があると（4-6 の終わりの画面を出したあと）、タイトル画面に「おたのしみ」が出ます。
 //  中は「なかまの場面へ」「雪だるま戦・強いモード」「回想ギャラリー」です。
+//    hard   ：強いモードで始める場面（bonus: true の場面）
 //    gallery：回想ギャラリーで見返せる絵（上から順に並べる）
 //      image：pc-images の中の画像の場所（4-3 の行の image・4-6 の finale の image と同じ書き方）
 //      label：絵の下に出す名前
 //      PCで index.html を直接開いたときだけ、画像を探します。画像がないものは出しません。
 const BONUS = {
+  //  hard：「雪だるま戦・強いモード」で始める場面（上の hard_start。仲間は、そこで3人えらぶ）
+  hard: { scene: "hard_start" },
   gallery: [
     { image: "kaisou/グレイシア.png", label: "グレイシア" },
     { image: "kaisou/ニンフィア.png", label: "ニンフィア" },
@@ -2331,6 +2624,7 @@ const UI = {
   bonusTitle: "🎁 おたのしみ",
   bonusNote: "クリアした記念に、もう一度遊べるよ。",
   bonusReplay: "🔁 なかまの場面へ",
+  bonusHard: "⛄ 雪だるま戦・強いモード",
   bonusGallery: "🖼 回想ギャラリー",
   galleryTitle: "🖼 回想ギャラリー",
   galleryNote: "絵をクリックすると、大きく見られるよ。",
@@ -2395,6 +2689,8 @@ const UI = {
   battleGuard: "みんなを守る準備ができた！",
   battleCharge: "次のターン、{who}の攻撃が{n}倍になる！",
   battleChargeOn: "💥 ため中",
+  battlePower: "{target}の攻撃が、このターンだけ{n}倍になる！",   // boost の技（強いモードのパパ）で、技に say がないとき
+  battlePowered: "このターンは、いりょく{n}倍！",                 // boost で強くなった攻撃のとき
   battleBlocked: "でも、ダメージを防いだ！",
   battleFoeHeal: "{enemy}のハートが、{n}つもどった！",
   battleDamage: "ハートが{n}つへった！",
