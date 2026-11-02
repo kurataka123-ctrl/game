@@ -493,7 +493,13 @@
     const name = el("div", { class: "nameplate", hidden: true });
     const text = el("div", { class: "text" });
     const mark = el("div", { class: "next-mark", text: "▼", hidden: true, "aria-hidden": "true" });
-    const box = el("div", { class: "textbox", tabindex: "0" }, name, text, mark);
+    // バックログのボタン（会話の枠の左下）。押しても、文は進めない。入力欄の文字を選んだままにする（押したときに、入力欄から外さない）
+    const logBtn = el("button", {
+      class: "log-btn", type: "button", text: T("logButton"), title: T("logHelp"),
+      onmousedown: (e) => e.preventDefault(),
+      onclick: (e) => { e.stopPropagation(); openLog(); },
+    });
+    const box = el("div", { class: "textbox", tabindex: "0" }, name, text, mark, logBtn);
     const root = el("section", { class: "screen novel" }, topbar, stage, box);
     return { root, chapter, partyBtn, chars, roomBox, gridBox, puzzleBox, battleBox, houseBox, picture, pictureImg, shade, layer, draft, stageMark, stage, name, text, mark, box };
   }
@@ -536,6 +542,20 @@
   // exploreNext：地図を調べ終えたあと、先へ進む関数 / house：家全体の地図（2-7・4-3・4-5）
   // picture：いま出している行の絵（画像の場所。出していなければ ""）/ picTimer：絵を出す・消すときの暗転の時計
   const NV = { lines: [], idx: 0, then: null, hold: true, typer: null, mode: "idle", shown: [], auto: 0, onLine: null, autoTimer: null, exploreNext: null, house: null, glow: false, picture: "", picTimer: null };
+
+  // ---- バックログ（PC。設計書 第11節）：今の場面で出た文を、あとから一覧で読みかえす ----
+  //   場面が変わるたびに空にする（runScene）。記録するのは、画面に出た文・選んだ答え・入れた答え・もらった言葉
+  //   { who, text }：文（who がなければ地の文）/ { picked }：選んだ・入れた答え
+  const BACKLOG = [];
+  const BACKLOG_MAX = 400;
+  function logAdd(entry) {
+    BACKLOG.push(entry);
+    if (BACKLOG.length > BACKLOG_MAX) BACKLOG.splice(0, BACKLOG.length - BACKLOG_MAX);
+  }
+  // 文を出さずに待っている間（余韻・絵の暗転）の印。そのあいだは、ログを開けない（ログのボタンもうすくする）
+  function setPausing(on) {
+    novel.root.classList.toggle("pausing", Boolean(on));
+  }
 
   // 選択肢・入力欄などを表示する（null で消す）
   // 表示中はキャラクターを上によせて、重ならないようにする
@@ -671,6 +691,7 @@
     clearTimeout(NV.picTimer);
     if (NV.typer) { NV.typer.cancel(); NV.typer = null; }
     NV.mode = "pause";
+    setPausing(true);
     novel.mark.hidden = true;
     novel.text.textContent = "";   // 前の行の文は、暗くなり始めるときに消す
     setShade(true, half);
@@ -695,6 +716,7 @@
     const lines = NV.lines;
     clearTimeout(NV.autoTimer);
     NV.mode = "pause";
+    setPausing(true);
     novel.mark.hidden = true;
     findPicture(ln.image).then(() => {
       if (token !== gen || NV.lines !== lines || NV.mode !== "pause") return;
@@ -737,6 +759,7 @@
       const lines = NV.lines;
       clearTimeout(NV.autoTimer);
       NV.mode = "pause";
+      setPausing(true);   // 余韻（4-3）などのあいだは、ログを開けない
       novel.mark.hidden = true;
       NV.autoTimer = setTimeout(() => {
         if (token !== gen || NV.lines !== lines || NV.mode !== "pause") return;
@@ -767,7 +790,9 @@
     const lines = NV.lines;
     let doneNow = false;
     clearTimeout(NV.autoTimer);
+    setPausing(false);
     setSpeaker(ln.who, glowOf(ln), ln.dim);
+    logAdd({ who: ln.who, text: ln.text });   // バックログに残す（今の場面で出た文）
     if (ln.sound) SND.play(ln.sound);
     if (NV.onLine) NV.onLine(i);
     novel.mark.hidden = true;
@@ -793,6 +818,7 @@
 
   function finishSay() {
     clearTimeout(NV.autoTimer);
+    setPausing(false);
     NV.mode = "idle";
     novel.mark.hidden = true;
     const then = NV.then;
@@ -804,6 +830,8 @@
   //   from："stage"（絵のところ）/ "box"（会話の枠）/ "key"（Enter・スペース）
   function nvAdvance(from) {
     if (currentView !== "novel") return;
+    // ログ・メニューなどを開いている間は進めない（戦いの文の自動送りも、閉じてからクリックで進む）
+    if (overlay.classList.contains("open")) return;
     if (NV.mode === "explore" && NV.typer) { NV.typer.skip(); return; }
     // 地図を調べ終えたあとは、会話の枠（または Enter）でも先へ進める（絵のところは、調べまちがいがあるので進まない）
     if (NV.mode === "explore" && NV.exploreNext && from !== "stage") { NV.exploreNext(); return; }
@@ -831,6 +859,7 @@
       NV.battle = null;
       NV.exploreNext = null;
       NV.finaleNext = null;
+      setPausing(false);
       novel.root.classList.remove("finale");   // 文のあとの演出（finale）で消した会話の枠を、もとにもどす
       novel.stageMark.hidden = true;
       if (NV.house) NV.house.stop();
@@ -933,7 +962,7 @@
       const box = el("div", { class: "choices" },
         list.map((c) => el("button", {
           class: "choice", type: "button", text: fill(c.text),
-          onclick: (e) => { e.stopPropagation(); setLayer(null); onPick(c); },
+          onclick: (e) => { e.stopPropagation(); setLayer(null); logAdd({ picked: fill(c.text) }); onPick(c); },
         })));
       setLayer(box);
     },
@@ -949,6 +978,7 @@
           if (!value) return;
           field.blur();
           setLayer(null);
+          logAdd({ picked: value });
           // 前の文を消しておく（正解のあとの演出の間に、まちがえたときの返事などが残らないように）
           novel.text.textContent = "";
           setSpeaker(null);
@@ -980,6 +1010,7 @@
     reveal(id, then) {
       const c = CHARS[id] || {};
       novel.mark.hidden = true;
+      logAdd({ who: null, text: `${T("wordGet")}　${T("wordFrom", { who: charName(c) })}「${c.word || ""}」` });
       openOverlay(el("div", { class: "panel word-panel", style: `--c:${c.color || "#ccc"}` },
         el("div", { class: "word-get", text: T("wordGet") }),
         el("div", { class: "word-from" },
@@ -1082,6 +1113,7 @@
         const said = dark
           ? item.dark || (item.shine ? T("darkShine") : T("darkDefault", { item: item.name || "" }))
           : item.text || item.name || "";
+        logAdd({ who: null, text: fill(said) });
         const handle = typeInto(novel.text, fill(said), () => {
           doneNow = true;
           NV.typer = null;
@@ -1385,6 +1417,8 @@
       onSwipe(view.board, (d) => move(d, false));
       GRID.key = (e) => {
         const dir = KEY_DIRS[e.key];
+        // 人物と話している間（会話の文・選択肢）の ↑キーは、歩くのに使わない（バックログを開く）
+        if (dir && e.key === "ArrowUp" && NV.mode !== "walk") return false;
         if (dir) {
           move(dir, e.repeat);
           return true;
@@ -3256,6 +3290,7 @@
     const skipLines = backToWalk || Boolean(sc.search && parkCount() > 0);
     state.scene = id;
     state.atEnd = false;
+    BACKLOG.length = 0;   // バックログは、今の場面で出た文だけ
     // 遊び直し（なかまの場面へ）で、いちばん先まで進んだ所に追いついたら、ふつうの記録にもどす
     if (state.main && sceneOrder(id) >= sceneOrder(state.main.scene)) state.main = null;
     state.chapter = sc.chapter || (jump ? inherited(id, "chapter") : state.chapter);
@@ -3603,6 +3638,42 @@
       el("div", { class: "party-grid" }, cells),
       el("p", { class: "panel-note", text: note }),
       el("button", { class: "btn primary", type: "button", text: T("close"), onclick: closeOverlay })));
+  }
+
+  // ---- バックログ（PC。設計書 第11節）：今の場面で出た文の一覧 ----
+  //   会話の枠の「ログ」ボタンか、↑キーで開く。Esc・「とじる」・外側のクリックで閉じると、もとの場面にもどる
+  //   開けないとき：物語の画面（PC）でないとき・ほかの画面を重ねているとき・はじめの演出のあいだ・
+  //   文を出さずに待っているあいだ（4-3 の余韻・絵の暗転など）・4-6 の文のあとの演出（雪と最後のイラスト）
+  //   入力欄や選択肢が出ていても開ける。開いているあいだ、入力欄からは外す（Enter で答えが送られないように）。
+  //   閉じたら、入力欄にもどす（入れかけの文字は、そのまま）
+  function canOpenLog() {
+    return currentView === "novel" && !intro && !overlay.classList.contains("open")
+      && NV.mode !== "pause" && NV.mode !== "finale";
+  }
+  function logRow(x) {
+    if (x.picked != null) return el("div", { class: "log-row picked", text: T("logPicked", { text: x.picked }) });
+    const c = x.who ? CHARS[x.who] : null;
+    const name = c ? (x.who === "hero" ? fill("{name}") : charName(c)) : "";
+    return el("div", { class: "log-row" + (name ? "" : " narration"), style: c ? `--c:${c.color || "#999"}` : null },
+      name ? el("span", { class: "log-name", text: name }) : null,
+      el("span", { class: "log-text", text: x.text }));
+  }
+  function openLog() {
+    if (!canOpenLog()) return;
+    const a = document.activeElement;
+    const back = a && ["INPUT", "TEXTAREA"].includes(a.tagName) ? a : null;
+    if (back) back.blur();
+    const list = el("div", { class: "log-list", tabindex: "-1" },
+      BACKLOG.length ? BACKLOG.map(logRow) : el("p", { class: "log-empty", text: T("logEmpty") }));
+    openOverlay(el("div", { class: "panel log-panel" },
+      el("h2", { text: T("logTitle") }),
+      el("p", { class: "panel-note", text: T("logNote") }),
+      list,
+      el("button", { class: "btn primary", type: "button", text: T("close"), onclick: closeOverlay })),
+    () => { if (back && back.isConnected) back.focus({ preventScroll: true }); });
+    // いちばん新しい文が見えるようにする。↑↓キー・ホイールで、さかのぼって読める
+    list.scrollTop = list.scrollHeight;
+    list.focus({ preventScroll: true });
   }
 
   // 夢の部屋の地図は、部屋が明るくなってから（data.js の set: "roomMap"）メニューに出す
@@ -4001,6 +4072,7 @@
     "partyTitle", "partyNote", "partyNoteMet", "partyNoteAll", "close",
     "menuTitle", "menuParty", "menuMap", "menuHouseMap", "menuToTitle", "menuNote",
     "menuReplay", "titleReplay", "replayTitle", "replayNote", "replayLocked",
+    "logButton", "logHelp", "logTitle", "logNote", "logEmpty", "logPicked",
     "mapTitle", "mapCaption", "explore", "roomDone", "darkDefault", "darkShine",
     "houseMapTitle", "houseMapCaption", "houseStarTemp",
     "iceHelp", "iceCount", "iceReset", "iceSkip", "iceBest", "iceClear",
@@ -5093,6 +5165,12 @@
     // （テスト用メニューなどの入力欄に文字を打っているときは、動かない）
     if (currentView === "novel" && GRID.key && !["input", "textarea", "select"].includes(tag) && GRID.key(e)) {
       e.preventDefault();
+      return;
+    }
+    // バックログ（PC）：↑キーで開く（入力欄に文字を入れているとき〔漢字の変換など〕は、開かない。ボタンでは開ける）
+    if (e.key === "ArrowUp" && currentView === "novel" && !["input", "textarea", "select"].includes(tag) && !e.isComposing) {
+      e.preventDefault();
+      if (!e.repeat) openLog();
       return;
     }
     if (["input", "textarea", "select", "button", "a"].includes(tag)) return;

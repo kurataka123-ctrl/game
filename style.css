@@ -436,6 +436,48 @@ button { font: inherit; color: inherit; touch-action: manipulation; }
 }
 @keyframes blink { 50% { opacity: 0; } }
 
+/* バックログのボタン（会話の枠の左下。PC）。文を出さずに待っているあいだ（4-3 の余韻など）は、うすくして押せなくする */
+.log-btn {
+  position: absolute;
+  left: 14px;
+  bottom: 5px;
+  padding: 1px 12px;
+  min-height: 0;
+  border: 1px solid #d9c196;
+  border-radius: 999px;
+  background: #fff;
+  color: #8a6a2e;
+  font-size: 12px;
+  line-height: 1.6;
+  letter-spacing: .08em;
+  cursor: pointer;
+  transition: opacity .3s;
+}
+.log-btn:hover { background: #fff6e2; }
+.novel.pausing .log-btn { opacity: .3; pointer-events: none; }
+
+/* バックログの一覧（重ねて表示する画面） */
+.panel.log-panel { width: min(680px, 100%); }
+.log-list {
+  flex: 1 1 auto;
+  min-height: 120px;
+  max-height: min(62vh, 440px);
+  overflow-y: auto;
+  padding: 10px 14px;
+  border-radius: 12px;
+  border: 1px solid #eadcbf;
+  background: #fff;
+  outline: none;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.log-row { display: flex; flex-direction: column; gap: 2px; text-align: left; line-height: 1.7; font-size: 15px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.log-name { align-self: flex-start; padding: 0 10px; border-radius: 999px; border: 2px solid var(--c, #999); font-size: 12px; font-weight: 700; line-height: 1.6; }
+.log-row.narration { color: var(--ink-soft); }
+.log-row.picked { color: #2f6fd0; font-weight: 700; }
+.log-empty { margin: 0; color: var(--ink-soft); font-size: 14px; }
+
 /* 選択肢・入力欄など（会話の枠の上に出る） */
 .stage-layer {
   position: absolute;
