@@ -356,6 +356,32 @@ button { font: inherit; color: inherit; touch-action: manipulation; }
   transition: opacity 0ms linear;
 }
 
+/* 文のあとの演出（data.js の場面の finale。4-6 エピローグ）
+   会話の枠をゆっくり消して、ゲーム画面の部分を広くする（9匹の並びも、ゆっくり下へ動く）。もどすときは、すぐにもどる */
+.novel.finale .textbox {
+  min-height: 0;
+  margin-bottom: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+  border-width: 0;
+  opacity: 0;
+  pointer-events: none;
+  transition: min-height .9s ease, margin .9s ease, padding .9s ease, border-width .9s ease, opacity .5s ease;
+}
+.novel.finale .textbox .text { min-height: 0; transition: min-height .9s ease; }
+/* クリックを待つ印（会話の枠を消しているとき）。会話の枠の ▼ と同じ点滅 */
+.stage-mark {
+  position: absolute;
+  right: 20px;
+  bottom: 14px;
+  z-index: 4;
+  color: #f3e6c8;
+  font-size: 16px;
+  text-shadow: 0 1px 4px rgba(0, 0, 0, .7);
+  pointer-events: none;
+  animation: blink 1s steps(2) infinite;
+}
+
 /* 選択肢・入力欄が出ている間は、キャラクターを上によせて小さくする */
 .stage.has-layer .chars { align-items: flex-start; padding-top: 3cqh; }
 .stage.has-layer .char-face {
@@ -1747,6 +1773,20 @@ button { font: inherit; color: inherit; touch-action: manipulation; }
 .end-text { margin: 0 0 20px; white-space: pre-wrap; line-height: 1.9; color: #4a4450; }
 .end-buttons { display: flex; flex-direction: column; gap: 10px; align-items: center; }
 .end-buttons .btn { width: min(320px, 100%); }
+/* スタッフの名前（data.js の end の credits。4-6 のエピローグの終わりの画面） */
+.end-card.has-credits { padding-top: 34px; }
+.end-card.has-credits .end-title { margin-bottom: 4px; }
+.end-card.has-credits .end-text {
+  margin: 0 0 18px;
+  font-family: Georgia, "Times New Roman", serif;
+  font-style: italic;
+  font-size: 32px;
+  line-height: 1.4;
+  letter-spacing: .08em;
+  color: #9a7432;
+}
+.end-credits { display: flex; flex-direction: column; gap: 4px; margin: 0 0 24px; }
+.end-credit { margin: 0; font-size: 16px; line-height: 1.8; color: #4a4450; white-space: pre-wrap; overflow-wrap: anywhere; }
 
 /* ---------------- はじめの演出（1-1。data.js の場面の intro） ----------------
    画面を暗くする幕。濃さと時間は engine.js が決める。演出のあいだだけ、クリックを受けとる（飛ばすため） */
@@ -2005,6 +2045,9 @@ button.replay-cell:active { transform: scale(.97); }
 /*  雪の位置・大きさ・速さは engine.js が決める（--x 横の位置 / --s 大きさ / --d 落ちる時間 / --sway 横のゆれ / --o こさ） */
 .snow-layer { position: absolute; inset: 0; z-index: 2; overflow: hidden; pointer-events: none; container-type: size; }
 .end-screen .snow-layer { z-index: 0; }   /* 終わりの画面では、カードのうしろにふらせる */
+/* 物語の画面では、絵（.stage-picture）と暗転（.stage-shade）より手前にふらせる。ふり始めは、ふわっと出す */
+.stage > .snow-layer { z-index: 3; animation: snow-in 1.2s ease-out both; }
+@keyframes snow-in { from { opacity: 0; } to { opacity: 1; } }
 .snow-layer i {
   position: absolute;
   top: -12px;

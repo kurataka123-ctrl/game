@@ -48,6 +48,9 @@
   const hashQuery = new URLSearchParams(location.hash.replace(/^#/, ""));
   const DEBUG = query.has("debug") || hashQuery.has("debug");
   const TOUCH = window.matchMedia && window.matchMedia("(pointer: coarse)").matches;
+  // PCで index.html を直接開いたとき（file://）。公開したページ（iPhone など）では false
+  //   data.js の条件「pcDirect」（4-6 の終わりの画面の「友情出演」など）に使う
+  const PC_DIRECT = location.protocol === "file:";
 
   // ==============================================================
   // 2. 小さな道具
@@ -123,7 +126,9 @@
   // 条件つきの行・選択肢
   //   { if: "indoor" } はその条件のときだけ、{ unless: "indoor" } はそうでないときだけ出す
   //   条件の名前は、set で記録したもの（state.flags）か、SETTINGS の true / false
+  //   pcDirect は、PCで index.html を直接開いたとき（4-6 の終わりの画面の「友情出演」）
   function flagOn(name) {
+    if (name === "pcDirect") return PC_DIRECT;
     return state.flags.includes(name) || S[name] === true;
   }
   function visible(item) {
@@ -482,13 +487,15 @@
     const shade = el("div", { class: "stage-shade", "aria-hidden": "true" });
     const layer = el("div", { class: "stage-layer" });
     const draft = el("div", { class: "draft-badge", text: T("draft"), hidden: true });
-    const stage = el("div", { class: "stage" }, chars, roomBox, gridBox, puzzleBox, battleBox, houseBox, picture, shade, layer, draft);
+    // クリックを待つ印（会話の枠を消しているとき。4-6 エピローグの最後のイラスト）
+    const stageMark = el("div", { class: "stage-mark", text: "▼", hidden: true, "aria-hidden": "true" });
+    const stage = el("div", { class: "stage" }, chars, roomBox, gridBox, puzzleBox, battleBox, houseBox, picture, shade, layer, draft, stageMark);
     const name = el("div", { class: "nameplate", hidden: true });
     const text = el("div", { class: "text" });
     const mark = el("div", { class: "next-mark", text: "▼", hidden: true, "aria-hidden": "true" });
     const box = el("div", { class: "textbox", tabindex: "0" }, name, text, mark);
     const root = el("section", { class: "screen novel" }, topbar, stage, box);
-    return { root, chapter, partyBtn, chars, roomBox, gridBox, puzzleBox, battleBox, houseBox, picture, pictureImg, shade, layer, draft, stage, name, text, mark, box };
+    return { root, chapter, partyBtn, chars, roomBox, gridBox, puzzleBox, battleBox, houseBox, picture, pictureImg, shade, layer, draft, stageMark, stage, name, text, mark, box };
   }
 
   // 文字送りの短い音を鳴らさない文字（空白・句読点・「…」・かっこなど）
@@ -800,6 +807,8 @@
     if (NV.mode === "explore" && NV.typer) { NV.typer.skip(); return; }
     // 地図を調べ終えたあとは、会話の枠（または Enter）でも先へ進める（絵のところは、調べまちがいがあるので進まない）
     if (NV.mode === "explore" && NV.exploreNext && from !== "stage") { NV.exploreNext(); return; }
+    // 文のあとの演出（finale。4-6 エピローグ）：雪と絵のあいだは進まない。そのあとは、クリック・Enter で先へ
+    if (NV.mode === "finale") { if (NV.finaleNext) NV.finaleNext(); return; }
     if (NV.mode !== "talk") return;
     if (NV.typer) { NV.typer.skip(); return; }
     if (NV.lines.slice(NV.idx + 1).some((l) => !l.effect)) nvShow(NV.idx + 1);
@@ -821,6 +830,9 @@
       NV.grid = null;
       NV.battle = null;
       NV.exploreNext = null;
+      NV.finaleNext = null;
+      novel.root.classList.remove("finale");   // 文のあとの演出（finale）で消した会話の枠を、もとにもどす
+      novel.stageMark.hidden = true;
       if (NV.house) NV.house.stop();
       NV.house = null;
       clearPicture();
@@ -976,6 +988,57 @@
         wordNode(c.word, "big"),
         el("p", { class: "panel-note", text: T("wordNote") }),
         el("button", { class: "btn primary", type: "button", text: T("ok"), onclick: closeOverlay })), then);
+    },
+
+    // 文のあとの演出（data.js の場面の finale。4-6 エピローグ）
+    //   1. 会話の枠をゆっくり消して、雪をふらせる（いまの画面〔9匹が並ぶ画面〕のまま）
+    //   2. snow ミリ秒たったら、暗転（fade ミリ秒）をはさんで、最後のイラスト（image）に切りかえる
+    //      絵は、PCで直接開いて、画像があるときだけ。ないときは、9匹が並ぶ画面のまま
+    //   3. クリック・Enter を待ってから then（終わりの画面）。1と2のあいだは、クリックしても進まない
+    finale(sc, then) {
+      const f = sc.finale && typeof sc.finale === "object" ? sc.finale : {};
+      const token = gen;
+      const alive = () => token === gen && NV.mode === "finale";
+      const snowMs = Number(f.snow) >= 0 ? Number(f.snow) : 3000;
+      const half = (Number(f.fade) >= 0 ? Number(f.fade) : 1000) / 2;
+      const image = typeof f.image === "string" ? f.image.trim() : "";
+      const found = image && ART_DIR ? findPicture(image) : Promise.resolve("");
+      clearTimeout(NV.autoTimer);
+      clearTimeout(NV.picTimer);
+      if (NV.typer) { NV.typer.cancel(); NV.typer = null; }
+      NV.mode = "finale";
+      NV.finaleNext = null;
+      setSpeaker(null);
+      novel.text.textContent = "";
+      novel.mark.hidden = true;
+      novel.root.classList.add("finale");   // 会話の枠を、ゆっくり消す（style.css の .novel.finale）
+      setSnow(novel.stage, true);
+      // クリック・Enter を待つ（画面の右下に ▼ を出す）
+      const ready = () => {
+        NV.picTimer = null;
+        if (!alive()) return;
+        novel.stageMark.hidden = false;
+        NV.finaleNext = () => {
+          NV.finaleNext = null;
+          novel.stageMark.hidden = true;
+          NV.mode = "idle";
+          then();
+        };
+      };
+      NV.picTimer = setTimeout(() => {
+        found.then((src) => {
+          if (!alive()) return;
+          if (!src) { ready(); return; }
+          setShade(true, half);
+          NV.picTimer = setTimeout(() => {
+            if (!alive()) return;
+            showPicture(src);
+            setShade(false, half);
+            // 絵が出たあと、少し間を置いてから、クリックを受けつける（文を読み進めていた勢いで、飛ばさないように）
+            NV.picTimer = setTimeout(ready, half + 800);
+          }, half);
+        });
+      }, snowMs);
     },
 
     // 地図を調べる
@@ -3358,7 +3421,12 @@
   function leave(sc, view) {
     if (hasChoices(sc)) return askChoice(sc, view);
     if (sc.input) return askInput(sc, view);
-    if (sc.end) return view === ChatView ? view.proceed(() => showEnd(sc)) : showEnd(sc);
+    if (sc.end) {
+      if (view === ChatView) return view.proceed(() => showEnd(sc));
+      // 文のあとの演出（finale。4-6 エピローグ）：雪と最後のイラストのあと、クリックで終わりの画面へ
+      if (sc.finale) return view.finale(sc, () => showEnd(sc));
+      return showEnd(sc);
+    }
     // knock：暗い窓の画面で、タップを待ってから次の場面へ（メッセージ画面だけ。2-7 のiPhone側）
     if (sc.knock && sc.next && view === ChatView) return view.knock(sc, () => runScene(sc.next));
     // search：公園で気配を探す。必要な数に達したら、「つづける ▶」で次の場面へ（メッセージ画面だけ）
@@ -3469,15 +3537,20 @@
     SND.ambient(null);
     SND.bgm(sceneBgm(sc));   // 曲は、その場面の曲のまま（エピローグの終わりの画面は、最終章の曲を続ける）
     setBg(endScreen, e.bg || state.bg || "night");
-    endScreen.replaceChildren(el("div", { class: "end-card" },
+    // スタッフの名前（end の credits。4-6）。条件（if・unless。pcDirect は、PCで直接開いたとき）に合う行だけを出す
+    const credits = toArray(e.credits).filter(visible)
+      .map((ln) => fill(ln && typeof ln === "object" ? ln.text : ln)).filter((t) => t.trim());
+    endScreen.replaceChildren(el("div", { class: "end-card" + (credits.length ? " has-credits" : "") },
       e.icon ? el("div", { class: "end-icon", text: e.icon, "aria-hidden": "true" }) : null,
       el("h2", { class: "end-title", text: fill(e.title || "") }),
       e.text ? el("p", { class: "end-text", text: fill(e.text) }) : null,
+      credits.length ? el("div", { class: "end-credits" }, credits.map((t) => el("p", { class: "end-credit", text: t }))) : null,
       el("div", { class: "end-buttons" },
         e.map ? el("button", { class: "btn", type: "button", text: houseMapOn() ? T("endHouseMap") : T("endMap"), onclick: openMap }) : null,
         e.next ? el("button", { class: "btn primary", type: "button", text: fill(e.nextLabel || T("endNext")), onclick: () => runScene(e.next) }) : null,
         el("button", { class: "btn", type: "button", text: T("toTitle"), onclick: showTitle }))));
-    setSnow(endScreen, Boolean(sc.snow));   // エピローグの雪は、終わりの画面でもふらせる
+    // 雪（場面の snow か、end の snow。4-6 のエピローグの終わりの画面）
+    setSnow(endScreen, Boolean(sc.snow || e.snow));
     show("end");
   }
 
@@ -4202,6 +4275,29 @@
         check(sc.end.next, `${at} の end`);
         checkText(sc.end.title, `${at} の end`);
         checkText(sc.end.text, `${at} の end`);
+        // スタッフの名前（credits。4-6）：文の行と同じ書き方（{ if: "pcDirect", text: … } で、PCで直接開いたときだけ）
+        //   「作：パパ」のような行は、話し手のセリフではなく、そのままの文として出す
+        if (sc.end.credits !== undefined && !Array.isArray(sc.end.credits)) errors.push(`${at} の end の credits は [ ] で囲んでください。`);
+        toArray(sc.end.credits).forEach((ln, i) => {
+          const where = `${at} の end の credits の${i + 1}行目`;
+          if (ln && typeof ln === "object" && ln.text == null) errors.push(`${where} に text（文章）がありません。`);
+          else checkText(ln && typeof ln === "object" ? ln.text : ln, where);
+        });
+        if (sc.end.snow !== undefined && typeof sc.end.snow !== "boolean") errors.push(`${at} の end の snow は、true か false にしてください。`);
+      }
+      // 文のあとの演出（finale。4-6 エピローグ）：雪をふらせてから、最後のイラストに切りかえる
+      if (sc.finale !== undefined) {
+        const f = sc.finale;
+        if (!f || typeof f !== "object") errors.push(`${at} の finale は、{ snow: 3000, image: "ending.png", fade: 1000 } の形で書いてください。`);
+        else {
+          for (const key of ["snow", "fade"]) if (f[key] != null && !(Number(f[key]) >= 0)) errors.push(`${at} の finale の ${key} は、0 以上の数（ミリ秒）にしてください。`);
+          if (f.image !== undefined && (typeof f.image !== "string" || !f.image.trim() || /^[\\/]|\.\./.test(f.image.trim()))) {
+            errors.push(`${at} の finale の image は、"ending.png" のように、pc-images の中の画像の場所を書いてください。`);
+          }
+          for (const key of Object.keys(f)) if (!["snow", "image", "fade"].includes(key)) warnings.push(`${at} の finale の「${key}」は使えません（snow・image・fade）。`);
+        }
+        if (!sc.end) warnings.push(`${at} の finale：end（終わりの画面）がない場面なので、使われません。`);
+        if (sc.mode === "chat") warnings.push(`${at} の finale：メッセージ形式（chat）の場面では、使われません。`);
       }
       if (walking(sc)) {
         if (sc.next || sc.choices || sc.input || sc.end) {
@@ -4887,19 +4983,22 @@
           ? "名前の一覧（name.js）：ファイルはあるが、NAME_LIST の names が読めない（書きまちがいかもしれません。name.sample.js と見くらべてください）。名前は確認せずに進みます。"
           : `名前の一覧（name.js）：${ART_DIR}/name.js が見つからない。名前は確認せずに進みます。`;
     });
+    // 行の絵（4-3 の回想のイラスト）と、文のあとの演出の絵（4-6 の最後のイラスト。場面の finale の image）
     const paths = [];
     for (const sc of Object.values(SCN)) {
       for (const ln of toArray(sc && sc.lines)) {
         const p = ln && typeof ln === "object" && typeof ln.image === "string" ? ln.image.trim() : "";
         if (p && !paths.includes(p)) paths.push(p);
       }
+      const fp = sc && sc.finale && typeof sc.finale.image === "string" ? sc.finale.image.trim() : "";
+      if (fp && !paths.includes(fp)) paths.push(fp);
     }
-    const picInfo = el("div", { text: paths.length ? "行の絵（image）：調べています……" : "行の絵（image）：data.js に書かれていません。" });
+    const picInfo = el("div", { text: paths.length ? "絵（image）：調べています……" : "絵（image）：data.js に書かれていません。" });
     if (paths.length) {
       Promise.all(paths.map(findPicture)).then((srcs) => {
         const missing = paths.filter((p, i) => !srcs[i]);
-        picInfo.textContent = `行の絵（image）：${paths.length}枚のうち ${paths.length - missing.length}枚が見つかった。`
-          + (missing.length ? `見つからない画像（その行は光らせる形で進む）：${missing.join("・")}` : "");
+        picInfo.textContent = `絵（4-3 の回想・4-6 の最後のイラスト）：${paths.length}枚のうち ${paths.length - missing.length}枚が見つかった。`
+          + (missing.length ? `見つからない画像（4-3 はその行を光らせる形、4-6 は9匹の並ぶ画面で進む）：${missing.join("・")}` : "");
       });
     }
     box.append(nameInfo, picInfo);
@@ -4939,7 +5038,7 @@
       localTool(),
       el("h4", { text: "遊ぶ前の準備：プレゼントの場所（4-5。このPCだけに記録）" }),
       presentTool(),
-      el("h4", { text: "遊ぶ前の準備：PCだけのフォルダ（pc-images の名前の一覧と、4-3 の回想のイラスト）" }),
+      el("h4", { text: "遊ぶ前の準備：PCだけのフォルダ（pc-images の名前の一覧と、4-3 の回想・4-6 の最後のイラスト）" }),
       pcFilesTool(),
       el("h4", { text: "答えを暗号にする（駅名など、ページに書きたくない答え用）" }),
       secretTool(),

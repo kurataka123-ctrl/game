@@ -20,6 +20,7 @@
 //    { unless: "indoor", text: "サンダース：……" }  → indoor ではないときだけ出す
 //    条件の名前は、選択肢や場面の set で記録したもの（例：indoor）か、
 //    SETTINGS の true / false の設定（例：useMirror）です。
+//    pcDirect は、PCで index.html を直接開いたとき（4-6 の終わりの画面の「友情出演」）に使います。
 //    選択肢（choices）にも、同じように if / unless を書けます。
 //
 //  【場面（シーン）の書き方】 くわしくは README.md を参照
@@ -29,7 +30,8 @@
 //    input   : 文字を入力させる（なぞなぞ・カードの言葉・名前など）
 //    quiz    : おまけクイズ（3-1 サンダース）。会話のあとに1問ずつ出し、正解数のセリフのあと next へ
 //              （書き方は jolteon_meet の場面と README の「おまけクイズ」を参照）
-//    end     : 章の終わりの画面を出す
+//    end     : 章の終わりの画面を出す（4-6 では、スタッフの名前 credits も。書き方は epilogue を参照）
+//    finale  : 文のあとの演出（4-6 エピローグ：雪をふらせてから、最後のイラストに切りかえる）
 //    mode    : "chat" にするとメッセージアプリ風（iPhone向け）の表示
 //    bg      : 背景（forest / ice / memory / night / dream / home /
 //              station / park / christmas）
@@ -63,7 +65,7 @@
 //    ambient : その場面のあいだ、くり返し鳴らす音（sound.js の音の名前。2-7 の風）
 //    bgm     : その場面で鳴らす曲（下の SETTINGS の bgm の名前。PCの場面だけ。書かない場面は鳴らさない）
 //    mute    : true にすると、その場面では音を鳴らさない（第3部の外の場面）
-//    snow    : true にすると、雪をふらせる（エピローグ）
+//    snow    : true にすると、その場面のあいだ雪をふらせる（終わりの画面にふらせるときは、end に snow: true）
 //    knock   : 暗い窓の画面（iPhone）。画面は暗い窓とこの文だけになり、タップすると next へ進む
 //              （2-7 のiPhone側：ブラッキーが窓を閉じて待つ）
 //    resume  : 「つづきから」で再開するときに、代わりに始める場面（2-7 のiPhone側：暗い窓から始める）
@@ -1871,22 +1873,36 @@ const SCENES = {
     ],
   },
 
-  // ---- 4-6 エピローグ ----
-  // ★ TRUE END（プレゼントに添えたカードのパスワード）は、あとで足す
+  // ---- 4-6 エピローグ（設計書 第8節） ----
+  //  イーブイの2行のあと、雪をふらせてから、最後のイラスト（pc-images/ending.png）に切りかえる（下の finale）。
+  //  絵は、PCで index.html を直接開いて、画像があるときだけ出す。
+  //  ないときは、9匹が並ぶ画面（4-3 の final_answer と同じ並び）のまま、雪をふらせる。
+  //  画面をクリック（Enter）すると、終わりの画面（下の end）。「タイトルへもどる」でタイトル画面へ。
+  //  プレゼントを手渡しにする日（SETTINGS の presentOnMap が false）は、1行目を「受け取ってくれた？」にする。
   epilogue: {
     bgm: "final",
     show: ["eevee", "glaceon", "sylveon", "espeon", "umbreon", "vaporeon", "flareon", "jolteon", "leafeon"],
-    snow: true,   // 雪をふらせる（終わりの画面でも）
     lines: [
-      { if: "presentOnMap", text: "イーブイ：見つかった？　よかった……！　みんなで、きみに「ありがとう」って伝えたかったんだ。" },
-      { unless: "presentOnMap", text: "イーブイ：よかった……！　みんなで、きみに「ありがとう」って伝えたかったんだ。" },
+      { if: "presentOnMap", text: "イーブイ：見つかった？　よかった……！" },
+      { unless: "presentOnMap", text: "イーブイ：受け取ってくれた？　よかった……！" },
       "イーブイ：またいつでも、夢の部屋で会おうね。{name}、メリークリスマス！",
     ],
+    // 文のあとの演出：会話の枠を消して雪をふらせ、snow ミリ秒たったら、最後のイラスト（image）に切りかえる
+    //   image：pc-images の中の画像の場所。切りかえるときの暗転の長さは fade（ミリ秒）
+    //   雪と絵のあいだは、クリック・Enter で進まない。絵が出たら（絵がないときは、雪のあと）、クリックを待つ
+    finale: { snow: 3000, image: "ending.png", fade: 1000 },
+    // 終わりの画面（スタッフの名前）。snow：雪をふらせる
+    //   credits：title と text の下に、1行ずつ出す文。{ if: "pcDirect", text: … } の行は、PCで直接開いたときだけ出す
+    //   友達の呼び名（{friend1} など）は、1-3 と同じ（SETTINGS の local。「表示用に隠す」形）
     end: {
-      icon: "🎄",
       bg: "christmas",
+      snow: true,
       title: "イーブイと8つの夢",
-      text: "― おしまい ―\n\n最後まで遊んでくれて、ありがとう。",
+      text: "Fin",
+      credits: [
+        "作：パパ",
+        { if: "pcDirect", text: "友情出演：{friend1}・{friend2}・{friend3}" },
+      ],
     },
   },
 };
