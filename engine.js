@@ -406,10 +406,13 @@
   // cleared：この端末で、言葉（give）を受けとった仲間（クリアした仲間。「なかまの場面へ」に出す）
   // main：「なかまの場面へ」で遊び直している間だけ、いちばん先まで進んだ所を覚えておく（MAIN_KEYS の項目）
   // finished：最終章を終えた（4-6 の終わりの画面を出した。data.js の end の complete）。タイトル画面に「おたのしみ」を出す
+  // replayUntil：最終章を終えたあとの「なかまの場面へ」で、遊び直しを終える場面（data.js の REPLAY の until）。
+  //   その場面へ進む所で、メニューへ戻る。遊び直していないときは null
+  // counts：日をまたいでも数える回数（強いモードで、パパなしで負けた回数など。data.js の BATTLES の retreat の count）
   const freshState = () => ({
     scene: null, met: [], words: [], flags: [], name: "", chapter: "", bg: "", atEnd: false, walk: null,
     parks: [], parkManual: 0, parkMisses: 0,
-    cleared: [], main: null, finished: false,
+    cleared: [], main: null, finished: false, replayUntil: null, counts: {},
   });
   let state = freshState();
   let gen = 0;            // 場面が変わるたびに増える番号（古いタイマーを無効にする）
@@ -766,15 +769,29 @@
     if (wait > 0) {
       const token = gen;
       const lines = NV.lines;
+      const alive = () => token === gen && NV.lines === lines && NV.mode === "pause";
       clearTimeout(NV.autoTimer);
       NV.mode = "pause";
       setPausing(true);   // 余韻（4-3）などのあいだは、ログを開けない
       novel.mark.hidden = true;
-      NV.autoTimer = setTimeout(() => {
-        if (token !== gen || NV.lines !== lines || NV.mode !== "pause") return;
+      // 次の文の行に絵（image）があるときは、絵を出す暗転（場面の imageFade）も、待つ時間の中に数える
+      //   （4-3 の余韻：イラストがあるときも、ないときも、最初の文が出るまでを wait の長さにそろえる）
+      //   絵が見つからなかったときは、残りの時間を待ってから文を出す
+      const next = NV.lines[i];
+      const sc = SCN[state.scene] || {};
+      const fade = next && next.image && ART_DIR && currentView === "novel"
+        ? Math.min(wait, Number(sc.imageFade) >= 0 ? Number(sc.imageFade) : 1000) : 0;
+      const go = () => {
+        if (!alive()) return;
         NV.mode = "talk";
         nvText(i);
-      }, wait);
+      };
+      NV.autoTimer = setTimeout(() => {
+        if (!alive()) return;
+        const pic = fade ? pictureOf(next) : "";
+        if (!fade || pic === undefined || pic !== NV.picture) { go(); return; }
+        NV.autoTimer = setTimeout(go, fade);
+      }, wait - fade);
       return;
     }
     nvText(i);
@@ -1476,6 +1493,25 @@
           },
         }) : null;
       };
+      // 負けたら、戦いを終えて、retreat の next の場面（強いモードの、仲間を集める所）へもどる
+      //   ヒント（retreat の hint）：条件に合うとき（パパが仲間にいないとき）だけ、負けた回数を数えて、回数に合うセリフを出す
+      //   回数は state.counts に残す（日をまたいでも数える）。回数が並べたセリフより多いときは、最後のセリフを毎回出す
+      const retreat = () => {
+        const rt = def.retreat;
+        const h = rt.hint && typeof rt.hint === "object" && visible(rt.hint) ? rt.hint : null;
+        let hint = [];
+        if (h && toArray(h.lines).length) {
+          const key = String(h.count || sc.battle);
+          const n = (Number(state.counts[key]) || 0) + 1;
+          state.counts[key] = n;
+          storage.save(state);
+          const list = toArray(h.lines);
+          hint = toArray(list[Math.min(n, list.length) - 1]);
+        }
+        GRID.key = null;
+        ui.menu.replaceChildren();
+        NovelView.say([...hint, ...toArray(rt.lines)], () => { if (alive()) runScene(rt.next); }, true);
+      };
       // 戦いを始める（仲間をえらぶ戦いなら、先にえらぶ）
       const begin = () => {
         if (!alive()) return;
@@ -1628,6 +1664,10 @@
             return;
           }
           if (st.lost) {
+            if (def.retreat && def.retreat.next) {
+              retreat();
+              return;
+            }
             losses += 1;
             const lose = toArray(def.lose);
             const hint = lose.length ? toArray(lose[Math.min(losses, lose.length) - 1]) : [];
@@ -1787,7 +1827,7 @@
     const out = [];
     const used = new Set();
     for (const ev of toArray(sc.events)) {
-      if (!ev || !ev.npc || !eventOn(sc, ev)) continue;
+      if (!ev || !ev.npc || ev.hidden || !eventOn(sc, ev)) continue;   // hidden：姿を見せない人物（強いモードのパパ）
       for (const p of eventCells(ev)) {
         if (used.has(xy(p.x, p.y)) || !CHARS[p.id]) continue;
         used.add(xy(p.x, p.y));
@@ -2966,7 +3006,8 @@
   // skip：画面をタップ（Enter・スペース）したときにすること（「入力中…」の文をすぐ出す・次の文へ進む）
   // wait：文を出したあと、まだ読んでいるところ（次の文は、タップしてから出す。設計書 第11節）
   // last：最後に出したメッセージ（タップを待つ間、この文の終わりに ▼ を出す）
-  const CV = { lastWho: undefined, chapter: "", skip: null, wait: false, last: null };
+  // next：「つづける ▶」を出しているあいだだけ、それを押す関数（Enter・スペースで押す）
+  const CV = { lastWho: undefined, chapter: "", skip: null, wait: false, last: null, next: null };
 
   function scrollChat() {
     requestAnimationFrame(() => { chat.log.scrollTop = chat.log.scrollHeight; });
@@ -3184,11 +3225,22 @@
       else put();
     },
 
+    // 「つづける ▶」のボタン。Enter・スペースでも押せる（PC。下のキーの受け口の CV.next）
+    //   ボタンを出しているあいだは、入力欄も選択肢も出ていないので、Enter がぶつからない。
+    //   キーを押しっぱなしにしたときの連続入力では押さない（前の文を送った Enter で、うっかり進まないように）
     proceed(cb) {
-      chat.foot.replaceChildren(el("button", {
-        type: "button", class: "next-btn", text: T("next"),
-        onclick: () => { chat.foot.replaceChildren(); CV.wait = false; cb(); },
-      }));
+      const token = gen;
+      const go = () => {
+        CV.next = null;
+        if (token !== gen) return;
+        chat.foot.replaceChildren();
+        CV.wait = false;
+        cb();
+      };
+      const btn = el("button", { type: "button", class: "next-btn", text: T("next"), onclick: go });
+      chat.foot.replaceChildren(btn);
+      CV.next = () => { if (btn.isConnected) go(); };
+      CV.next.btn = btn;
       scrollChat();
     },
 
@@ -3336,6 +3388,13 @@
       toast(T("noScene", { id }));
       return;
     }
+    // 合言葉・テスト用メニュー・強いモードで場面へとんだら、遊び直し（なかまの場面へ）の終わりの印は消す
+    if (jump && !(opts && opts.replay)) state.replayUntil = null;
+    // 最終章を終えたあとの「なかまの場面へ」：終える場面（REPLAY の until）へ進む所で、メニューへ戻る
+    if (state.replayUntil && id === state.replayUntil) {
+      endReplay();
+      return;
+    }
     // ほかの方法で場面へ進んだら（テスト用メニューなど）、はじめの演出はやめる
     if (intro && !(opts && opts.intro === intro)) stopIntro();
     gen += 1;
@@ -3344,6 +3403,7 @@
     if (NV.typer) { NV.typer.cancel(); NV.typer = null; }
     clearTimeout(NV.autoTimer);
     CV.skip = null;
+    CV.next = null;
     // 歩いている途中の場面にもどったとき（会話のあと・つづきから）は、はじめの会話をくり返さない
     const backToWalk = Boolean(walking(sc) && state.walk && state.walk.scene === id);
     // 公園で気配を探す場面は、1つでも見つけていたら、はじめの会話を出さない（最後のヒントの文から）
@@ -3935,7 +3995,9 @@
     };
   }
 
-  // 選んだ仲間の場面を、最初から始める。終えたら、話の続きへそのまま進む
+  // 選んだ仲間の場面を、最初から始める
+  //   最終章を終える前：終えたら、話の続きへそのまま進む
+  //   最終章を終えたあと：REPLAY に until を書いた仲間（PCの3匹）は、終えたら「なかまの場面へ」のメニューへ戻る
   function startReplay(r) {
     // タイトル画面から選んだときは、この端末に保存した記録で始める
     if (currentView === "title") loadState(storage.load());
@@ -3945,9 +4007,26 @@
     state.walk = null;   // 歩けるマップは、場面の最初の場所から
     // その場面の中だけで使う条件は消してから始める（1-3 の友達など。data.js の REPLAY の unset）
     for (const f of toArray(r.unset)) state.flags = state.flags.filter((x) => x !== f);
+    // 終える場面（最終章を終えたあとだけ）
+    state.replayUntil = state.finished && r.until && SCN[r.until] && state.main ? r.until : null;
     // メッセージ画面（iPhone）で選んだときも、前の会話を消してから始める
     currentView = "";
-    runScene(r.scene, true);
+    runScene(r.scene, true, { replay: true });
+  }
+
+  // 遊び直しを終えて、「なかまの場面へ」のメニューへ戻る（最終章を終えたあと）
+  //   いちばん先まで進んだ所にもどしてから保存する（なかまノートの言葉・会った仲間・名前は、そのまま）。
+  //   メニューは、タイトル画面の上に開く（「◀ もどる」で、おたのしみ）
+  function endReplay() {
+    state.replayUntil = null;
+    if (state.main) {
+      Object.assign(state, state.main);
+      state.main = null;
+    }
+    storage.save(state);
+    showTitle();
+    const saved = normalized(storage.load());
+    openReplay(saved, () => openBonus(saved));
   }
 
   function confirmBox(message, yesLabel, onYes) {
@@ -3986,6 +4065,7 @@
     if (NV.typer) { NV.typer.cancel(); NV.typer = null; }
     clearTimeout(NV.autoTimer);
     CV.skip = null;
+    CV.next = null;
     closeOverlay();
     SND.setMode("short");   // タイトルと合言葉の画面では、短い音（正解音など）だけ。曲は鳴らさない
     SND.ambient(null);
@@ -4115,6 +4195,13 @@
     }
     if (!st.main || typeof st.main !== "object" || !SCN[st.main.scene]) st.main = null;
     else if (!Array.isArray(st.main.flags)) st.main.flags = st.flags.slice();
+    if (typeof st.replayUntil !== "string" || !SCN[st.replayUntil] || !st.main) st.replayUntil = null;
+    // 数えている回数：0 以上の整数だけを残す
+    const counts = {};
+    if (st.counts && typeof st.counts === "object") {
+      for (const [k, v] of Object.entries(st.counts)) if (Number(v) > 0) counts[k] = Math.floor(Number(v));
+    }
+    st.counts = counts;
     // 前の版の記録（finished がない）：最終章の終わりの画面（end の complete）にいれば、終えたとみなす
     if (typeof (save && save.finished) !== "boolean") {
       const doneAt = (m) => Boolean(m && m.atEnd && SCN[m.scene] && SCN[m.scene].end && SCN[m.scene].end.complete === true);
@@ -4133,6 +4220,7 @@
   // 「なかまの場面へ」で遊び直している途中なら、いちばん先まで進んだ所から再開する
   function resume(save) {
     loadState(save);
+    state.replayUntil = null;
     if (state.main) {
       Object.assign(state, state.main);
       state.main = null;
@@ -4592,6 +4680,11 @@
       if (!r.scene) errors.push(`${at}：始める場面（scene）が書かれていません。`);
       else check(r.scene, at);
       checkText(r.label, `${at} の label`);
+      if (r.until !== undefined) {
+        check(r.until, `${at} の until`);
+        if (r.scene && r.until === r.scene) errors.push(`${at}：until（終える場面）が、始める場面と同じです。`);
+        else if (SCN[r.until] && SCN[r.scene] && deviceOf(r.until) !== deviceOf(r.scene)) warnings.push(`${at}：until の場面「${r.until}」は、始める場面とちがう端末の場面です。`);
+      }
     });
     // クリア後のおたのしみ（BONUS）：強いモードの始める場面
     for (const [id, sc] of Object.entries(SCN)) {
@@ -4931,6 +5024,24 @@
         check(def.skip.next, `${at} の skip`);
         checkLines(def.skip.reply, `${at} の skip の reply`);
       }
+      // 負けたら戦いを終えて、ほかの場面へもどる（強いモード。retreat）
+      if (def.retreat !== undefined) {
+        const rt = def.retreat;
+        if (!rt || typeof rt !== "object" || !rt.next) errors.push(`${at} の retreat は、{ next: "hard_start", lines: [ … ] } のように、もどる場面（next）を書いてください。`);
+        else {
+          check(rt.next, `${at} の retreat`);
+          checkLines(rt.lines, `${at} の retreat の lines`, BATTLE_VARS);
+          if (def.lose !== undefined || def.skip !== undefined) warnings.push(`${at}：retreat があるときは、lose と skip は使われません（負けたら、すぐに retreat の next へもどります）。`);
+          if (rt.hint !== undefined) {
+            const h = rt.hint;
+            if (!h || typeof h !== "object" || !Array.isArray(h.lines) || !h.lines.length) errors.push(`${at} の retreat の hint は、{ count: "hardLose", lines: [[…], […]] } の形で書いてください。`);
+            else {
+              if (h.count !== undefined && (typeof h.count !== "string" || !h.count.trim())) errors.push(`${at} の retreat の hint の count は、名前（文字）で書いてください。`);
+              h.lines.forEach((l, k) => checkLines(l, `${at} の retreat の hint の${k + 1}回目`, BATTLE_VARS));
+            }
+          }
+        }
+      }
       // どう選んでも勝てない戦いになっていないか（仲間をえらぶ戦いは、えらび方を全部）
       //   強いモード（hard: true）は、勝てない仲間の組み合わせがあってもよい。どの組み合わせでも勝てないときだけ知らせる
       const teams = battleTeams(id);
@@ -5014,6 +5125,8 @@
         return;
       }
       for (const n of toArray(ev.npc)) if (!CHARS[n]) errors.push(`${where}：「${n}」というキャラクターがいません。`);
+      if (ev.hidden !== undefined && typeof ev.hidden !== "boolean") errors.push(`${where} の hidden は、true か false にしてください。`);
+      else if (ev.hidden && !ev.npc) warnings.push(`${where}：hidden（姿を見せない）は、人物（npc）の出来事にだけ使えます。`);
       if (ev.door) {
         if (!m.edges.some((e) => e.id === ev.door)) errors.push(`${where}：地図「${sc.walk}」に、出入口「${ev.door}」がありません（house.js の edges の id）。`);
       } else if (ev.at == null) {
@@ -5021,7 +5134,7 @@
       }
       for (const p of eventCells(ev)) {
         if (!inside(p.x, p.y)) errors.push(`${where}：場所 [${p.x}, ${p.y}] が、地図の外です。`);
-        else if (blocked.has(xy(p.x, p.y))) warnings.push(`${where}：場所 [${p.x}, ${p.y}] に家具があります。`);
+        else if (blocked.has(xy(p.x, p.y))) { if (!ev.hidden) warnings.push(`${where}：場所 [${p.x}, ${p.y}] に家具があります。`); }
         else if (ev.npc) npcCells.add(xy(p.x, p.y));
       }
       if (!ev.say && !ev.next && !ev.choices) errors.push(`${where}：say（セリフ）か next（次の場面）を書いてください。`);
@@ -5405,6 +5518,10 @@
     if (currentView === "novel") {
       e.preventDefault();
       nvAdvance("key");
+    } else if (currentView === "chat" && CV.next && CV.next.btn.isConnected) {
+      // 「つづける ▶」（メッセージ画面）：Enter・スペースで押す。押しっぱなしの連続入力では押さない
+      e.preventDefault();
+      if (!e.repeat) CV.next();
     } else if (currentView === "chat" && CV.skip) {
       e.preventDefault();
       CV.skip();
