@@ -1156,6 +1156,21 @@ const SCENES = {
     },
   },
 
+  // ---- 2-5 続き　シャワーズの鏡（PC版。最終章を終えたPCの「なかまの場面へ」だけで通る） ----
+  //  ブースターの場面をはさまずに、部屋の場面（vaporeon_meet）のあと、ここへ進む（REPLAY の detour）。
+  //  本当の浴室が前提の行（ぬらさないで・スマホは外に・お湯を出して…床はすべる）は出さない。
+  //  答え・まちがえたとき・ヒント・スキップは、vaporeon_bath と同じ（SCENES の下で写す。直すときは vaporeon_bath を直す）
+  vaporeon_bath_pc: {
+    mode: "chat",
+    lines: [
+      "シャワーズ：ブースターのおかげで、お湯はもう温まっているみたい。さあ、湯気の番よ。",
+      "シャワーズ：湯気がたまると、鏡に文字が浮かぶの。……{name}には、何て読めたかしら？",
+    ],
+    input: {
+      prompt: "鏡に浮かんだ文字は？",
+    },
+  },
+
   vaporeon_word: {
     mode: "chat",
     give: "vaporeon",
@@ -1416,11 +1431,13 @@ const SCENES = {
     mode: "chat",
     meet: "jolteon",
     lines: [
-      { unless: "indoor", text: "イーブイ：……{name}、聞こえる？　声がちょっと遠いけど、大丈夫そう。" },
+      { unless: ["indoor", "pcReplay"], text: "イーブイ：……{name}、聞こえる？　声がちょっと遠いけど、大丈夫そう。" },
       "サンダースが会話に参加しました",
       { unless: "indoor", text: "サンダース：おっそーい！　待ってるあいだに、駅を3周しちゃったよ！" },
       { if: "indoor", text: "サンダース：おっそーい！　待ちきれなくて、窓の外まで走ってきちゃったよ！" },
       { if: "indoor", text: "サンダース：姿は見せられないけど、窓ごしなら話せるぜ！" },
+      // 最終章を終えたPCで遊び直すとき（REPLAY の pcReplay）：あいさつ・クイズの導入・問題は、外へ出た日の形（10問）。
+      //   出さないのは、いちばん上のイーブイの「聞こえる？」と、Q1 の前の「スマホはポケットにな」（11/3 たかさんの決定：案1）
       "サンダース：オレはサンダース。電車って電気で走るんだぜ。オレと気が合いそうだろ？",
       { unless: "indoor", text: "サンダース：3周もすると、いろいろ気づくんだよな。よし、問題だ！" },
       { if: "indoor", text: "サンダース：窓の外を走りながら、電車のことを考えてたんだ。よし、問題だ！" },
@@ -1447,7 +1464,7 @@ const SCENES = {
         // Q1 階段の段数【要確認：たかさんが現地で数える。選択肢・answer・explain・plus を直す】
         {
           unless: "indoor",
-          before: "見に行くときは、スマホはポケットにな。",
+          before: { unless: "pcReplay", text: "見に行くときは、スマホはポケットにな。" },   // PCで遊び直すときは出さない
           ask: "~huTlhuSDjdXgguzLhvXIhq7YkefejubPlebZyO3/huDGhuT0huemjejrh8PQhvbngZDxlMvUjuTnlefuwtjt",
           choices: ["~VFSQy9A=", "~VFaQy9A=", "~VFCQy9A="],
           answer: 1,
@@ -2089,6 +2106,9 @@ const SCENES = {
   },
 };
 
+// シャワーズの鏡（PC版）の入力欄：問いの文（prompt）のほかは、iPhone の浴室（vaporeon_bath）と同じものを使う
+SCENES.vaporeon_bath_pc.input = Object.assign({}, SCENES.vaporeon_bath.input, SCENES.vaporeon_bath_pc.input);
+
 
 // ---------------- 戦い（1-3 ニンフィアの花畑） ----------------
 //  ドラクエ風の選択式バトルです（設計書 第5節。10/28 の見直しで、雪だるま兄弟との2戦にしました）。
@@ -2486,15 +2506,24 @@ const KEYWORDS = {
 //  タイトル画面とメニュー（≡）の「なかまの場面へ」から、クリアした仲間の場面を最初から遊べます。
 //  最終章を終える前は、終えたら、話の続きへそのまま進みます（一度通った合言葉や入力欄にも、もう一度出会います）。
 //  最終章を終えたあと（4-6 の終わりの画面を出したあと）は、until を書いた仲間は、終えたら「なかまの場面へ」の
-//  メニューへ戻ります（タイトル画面の上に開く）。いまは PC の3匹（グレイシア・ニンフィア・エーフィ）だけです。
+//  メニューへ戻ります（タイトル画面の上に開く）。8匹とも until を書いています。
+//  最終章を終えたPCでは、iPhoneの5匹も並びます（「ただいま」で8匹と会った記録を持つため。設計書 第11節）。
 //    who   : 仲間（CHARACTERS の名前）。この端末で、その仲間の言葉（give）を受けとるとクリア
 //    scene : 遊び直すときに始める場面
 //    label : 名前の上に出す、場面の番号と場所【仮】
 //    unset : 遊び直すときに消す条件（その場面の中だけで使うもの。1-3 の友達など）
 //    until : 最終章を終えたあと、この場面へ進む所で遊び直しを終える（その場面は始めずに、メニューへ戻る）
+//    ―― 次の3つは、最終章を終えたあとの遊び直し（until で終えるとき）だけ使う ――
+//    set   : 遊び直すあいだだけ付ける条件（終えたら、遊ぶ前の条件にもどる）
+//            pcReplay は、PCで遊び直す iPhone の場面の目印（3-1 のサンダースの文を、PC用にする）
+//    detour: { "進む場面": "代わりに進む場面" }。その場面へ進む所で、代わりの場面へ進む（シャワーズの浴室）
+//    skipNow: true → 入力欄の「見つからない」などのボタン（skip）を、まちがえる前から出す（2-6 のカード・2-5続きの鏡）
+//    name  : true → 名前の入力欄に、名前を最初から入れておく（2-4 のブラッキー）
+//            pc-images/name.js の guess（なければ names の1つ目）。name.js がないときは、今の名前 {name}
+//            入れた名前は、遊び直しのあいだだけ使い、終えたら元の名前にもどす
 //  ・まだクリアしていない仲間は「？」にして、名前も絵も出しません（ネタバレを防ぐ）。
 //  ・記録はPCとiPhoneで別々です。並ぶのは、その端末でクリアした仲間がいる側だけです
-//    （場面の mode が "chat" の仲間は iPhone、ほかは PC）。
+//    （場面の mode が "chat" の仲間は iPhone、ほかは PC）。最終章を終えたあとは、8匹とも並びます。
 //  ・遊び直しても、いちばん先まで進んだ所・なかまノートの言葉・呼び名は減りません。
 //    「つづきから」は、いちばん先まで進んだ所から再開します。
 const REPLAY = [
@@ -2505,12 +2534,25 @@ const REPLAY = [
   { who: "sylveon",  scene: "sylveon",       label: "1-3　花畑", unset: ["friend1", "friend2", "friend3", "humans"], until: "sylveon_after" },
   // エーフィ：言葉のあとの2行（espeon_2）まで聞いて、広場を歩いて出る場面（plaza_exit）の前で終える
   { who: "espeon",   scene: "espeon_arrive", label: "1-4　光の広場", until: "plaza_exit" },
-  { who: "umbreon",  scene: "umbreon_phone", label: "2-4　ブラッキーの窓" },
-  { who: "vaporeon", scene: "vaporeon_find", label: "2-5　部屋" },
-  { who: "flareon",  scene: "flareon_find",  label: "2-6　台所" },
+  // ---- iPhone の5匹（最終章を終えたPCでも遊べる。言葉を受けとって、なかまノートにしまう所で終える） ----
+  // ブラッキー：言葉と「なかまノートにしまっておこう」のあと、部屋でシャワーズを探す場面（vaporeon_find）の前で終える
+  //   名前の入力欄には、本当の名前を最初から入れておく（Enter で進める）
+  { who: "umbreon",  scene: "umbreon_phone", label: "2-4　ブラッキーの窓", until: "vaporeon_find",
+    set: ["pcReplay"], name: true },
+  // シャワーズ：部屋の場面のあと、ブースターの場面（flareon_find）をはさまずに、PC用の浴室（vaporeon_bath_pc）へ。
+  //   言葉のあと、2-7 の場面（phone_to_pc）の前で終える
+  { who: "vaporeon", scene: "vaporeon_find", label: "2-5　部屋", until: "phone_to_pc",
+    set: ["pcReplay"], detour: { flareon_find: "vaporeon_bath_pc" }, skipNow: true },
+  // ブースター：言葉と「お風呂、ぼくが温めておくね」のあと、浴室の場面（vaporeon_bath）の前で終える
+  //   カードの「見つからない」は、まちがえる前から出す
+  { who: "flareon",  scene: "flareon_find",  label: "2-6　台所", until: "vaporeon_bath", set: ["pcReplay"], skipNow: true },
   // サンダースとリーフィアは、3-0 の出発からではなく、それぞれの場面から始める
-  { who: "jolteon",  scene: "jolteon_meet",  label: "3-1　駅" },
-  { who: "leafeon",  scene: "leafeon_meet",  label: "3-2　公園" },   // 公園の気配探しは通らない
+  // サンダース：言葉のあと、リーフィアへ向かう文（jolteon_bye）の前で終える
+  //   最終章を終えたPCでは、外へ出た日の形で、おまけクイズは10問（jolteon_meet の pcReplay）
+  { who: "jolteon",  scene: "jolteon_meet",  label: "3-1　駅", until: "jolteon_bye", set: ["pcReplay"] },
+  // リーフィア：言葉のあと、「パソコンで『ただいま』」の文（leafeon_bye）の前で終える
+  //   公園の気配探しは通らない。最終章を終えたPCでは、家の日（indoor）として始める
+  { who: "leafeon",  scene: "leafeon_meet",  label: "3-2　公園", until: "leafeon_bye", set: ["pcReplay", "indoor"] },
 ];
 
 

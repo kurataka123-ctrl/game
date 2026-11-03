@@ -186,6 +186,8 @@
       maxlength: spec.name ? 12 : null,
       autocomplete: "off", autocapitalize: "off", autocorrect: "off", spellcheck: "false",
       enterkeyhint: enter, "aria-label": fill(spec.prompt || T("inputPrompt")),
+      // value：最初から入れておく文字（最終章を終えたPCで遊び直す 2-4 の名前。data.js の REPLAY の name）
+      value: spec.value ? String(spec.value) : null,
     });
   }
 
@@ -403,11 +405,14 @@
       finished: true,
       cleared: unionList(b.cleared, st.cleared),
       counts: maxCounts(b.counts, st.counts),
-      name: (typeof st.name === "string" && st.name) || (typeof b.name === "string" ? b.name : ""),
+      // 遊び直し（なかまの場面へ）で入れた名前は使わない（遊ぶ前の名前。REPLAY の name）
+      name: (typeof keptName(st) === "string" && keptName(st)) || (typeof b.name === "string" ? b.name : ""),
     };
     bonusStore.save(bonusRec);
   }
   const hasBonus = () => bonusRec.finished === true;
+  // 遊び直しの前の名前（遊び直しのあいだは state.main.name に覚えておく）
+  const keptName = (st) => (st.main && typeof st.main.name === "string" ? st.main.name : st.name);
   // 遊ぶ前に、このPCで入れておく呼び名（data.js の SETTINGS.local。友達の呼び名など）
   //   公開ページに書かないため、この端末のブラウザだけに記録する。記録（セーブ）を消しても残る
   const LOCAL = S.local || {};
@@ -455,11 +460,12 @@
   // finished：最終章を終えた（4-6 の終わりの画面を出した。data.js の end の complete）。タイトル画面に「おたのしみ」を出す
   // replayUntil：最終章を終えたあとの「なかまの場面へ」で、遊び直しを終える場面（data.js の REPLAY の until）。
   //   その場面へ進む所で、メニューへ戻る。遊び直していないときは null
+  // replayWho：replayUntil のときに遊び直している仲間（REPLAY の detour・name を使うため）。遊び直していないときは null
   // counts：日をまたいでも数える回数（強いモードで、パパなしで負けた回数など。data.js の BATTLES の retreat の count）
   const freshState = () => ({
     scene: null, met: [], words: [], flags: [], name: "", chapter: "", bg: "", atEnd: false, walk: null,
     parks: [], parkManual: 0, parkMisses: 0,
-    cleared: [], main: null, finished: false, replayUntil: null, counts: {},
+    cleared: [], main: null, finished: false, replayUntil: null, replayWho: null, counts: {},
   });
   let state = freshState();
   let gen = 0;            // 場面が変わるたびに増える番号（古いタイマーを無効にする）
@@ -3430,13 +3436,19 @@
   // opts.intro：はじめの演出（playIntro）から始めるとき。会話の文は、演出が終わってから出す（opts.intro.ready）
   // opts.bgmFade：場面の曲を始めるときのフェードの長さ（ミリ秒。はじめの演出で、小さい音から始めるため）
   function runScene(id, jump = false, opts = null) {
+    // 合言葉・テスト用メニュー・強いモードで場面へとんだら、遊び直し（なかまの場面へ）の終わりの印は消す
+    if (jump && !(opts && opts.replay)) {
+      state.replayUntil = null;
+      state.replayWho = null;
+    }
+    // 最終章を終えたあとの遊び直し：その場面へ進む所で、代わりの場面へ進む（REPLAY の detour。シャワーズの浴室）
+    const row = state.replayUntil ? replayRow(state.replayWho) : null;
+    if (row && row.detour && typeof row.detour === "object" && SCN[row.detour[id]]) id = row.detour[id];
     const sc = SCN[id];
     if (!sc) {
       toast(T("noScene", { id }));
       return;
     }
-    // 合言葉・テスト用メニュー・強いモードで場面へとんだら、遊び直し（なかまの場面へ）の終わりの印は消す
-    if (jump && !(opts && opts.replay)) state.replayUntil = null;
     // 最終章を終えたあとの「なかまの場面へ」：終える場面（REPLAY の until）へ進む所で、メニューへ戻る
     if (state.replayUntil && id === state.replayUntil) {
       endReplay();
@@ -3658,11 +3670,29 @@
       ? () => view.say(toArray(hintList[Math.min(hints, hintList.length - 1)]), () => askInput(sc, view, misses, hints + 1), false)
       : null;
     const skip = spec.skip && spec.skip.next ? spec.skip : null;
-    const onSkip = skip && misses >= (skip.after == null ? 2 : skip.after)
+    // 最終章を終えたあとの遊び直し（REPLAY の skipNow）では、まちがえる前から出す（PCでは、カードや鏡を見に行けないため）
+    const replaying = state.replayUntil ? replayRow(state.replayWho) : null;
+    const skipAfter = replaying && replaying.skipNow === true ? 0 : skip && skip.after == null ? 2 : skip && skip.after;
+    const onSkip = skip && misses >= skipAfter
       ? () => view.say(toArray(skip.reply), () => runScene(skip.next), true)
       : null;
     // back：「もどる」ボタンで、その場面へもどる（選択肢を選び直せるように）
     const onBack = spec.back ? () => runScene(spec.back) : null;
+    // 最終章を終えたあとの遊び直しで、名前の入力欄に名前を最初から入れておく（2-4 のブラッキー。REPLAY の name）
+    //   pc-images/name.js の guess（なければ names の1つ目）。name.js がないとき（公開ページなど）は、今の名前 {name}
+    const row = spec.name && state.replayUntil ? replayRow(state.replayWho) : null;
+    if (row && row.name === true && !("value" in spec)) {
+      const token = gen;
+      loadNames().then(({ list }) => {
+        if (token !== gen) return;
+        const value = (list && list.guess) || fill("{name}");
+        askInputWith(sc, view, Object.assign({}, spec, { value }), misses, hints, onHint, onSkip, onBack);
+      });
+      return;
+    }
+    askInputWith(sc, view, spec, misses, hints, onHint, onSkip, onBack);
+  }
+  function askInputWith(sc, view, spec, misses, hints, onHint, onSkip, onBack) {
     view.input(spec, (text) => {
       // name: true → 入力した文字を、主人公の名前として記録する（正解・不正解はない）
       if (spec.name) {
@@ -3918,13 +3948,22 @@
 
   // 「なかまの場面へ」に並べる仲間：クリアした仲間が1匹でもいる端末の仲間（まだの仲間は done: false）
   //   ふつうは、その端末の仲間だけが並ぶ（PCの3匹か、iPhoneの5匹）
+  //   最終章を終えたあと（PC）は、iPhoneの5匹も並べる（「ただいま」で8匹と会った記録を持つため。設計書 第11節）
   function replayRows(st) {
     const cleared = toArray(st && st.cleared);
+    const finished = Boolean(st && st.finished);
     const rows = RP.filter((r) => r && CHARS[r.who] && SCN[r.scene])
-      .map((r) => ({ r, device: deviceOf(r.scene), done: cleared.includes(r.who) }));
+      .map((r) => {
+        const device = deviceOf(r.scene);
+        return { r, device, done: cleared.includes(r.who) || (finished && device === "phone") };
+      });
     const devices = new Set(rows.filter((x) => x.done).map((x) => x.device));
     return rows.filter((x) => devices.has(x.device));
   }
+  // 遊び直している仲間の REPLAY の行（state.replayWho）。なければ null
+  const replayRow = (who) => (who ? RP.find((r) => r && r.who === who) || null : null);
+  // REPLAY の set に書いた条件（遊び直しのあいだだけ付ける）
+  const REPLAY_SET = new Set(RP.flatMap((r) => toArray(r && r.set)));
 
   // st：並べるときに使う記録（タイトル画面では、この端末に保存した記録）
   // back：「◀ もどる」で開き直す画面（「おたのしみ」から開いたとき）
@@ -4058,11 +4097,18 @@
     for (const f of toArray(r.unset)) state.flags = state.flags.filter((x) => x !== f);
     // 終える場面（最終章を終えたあとだけ）
     state.replayUntil = state.finished && r.until && SCN[r.until] && state.main ? r.until : null;
+    state.replayWho = state.replayUntil ? r.who : null;
     // 最終章を終えたあとは、遊び直しで増えた言葉・会った仲間も、終えたときに元へもどす
     //   （「はじめから」のあとに遊び直しても、今の旅のなかまノートに、先の仲間が入らないように。遊ぶ前より減ることはない）
+    //   名前も、遊ぶ前の名前を覚えておき、終えたら元へもどす（2-4 で名前を入れても、PCの名前は変わらない）
     if (state.replayUntil) {
       if (!Array.isArray(state.main.words)) state.main.words = state.words.slice();
       if (!Array.isArray(state.main.met)) state.main.met = state.met.slice();
+      if (typeof state.main.name !== "string") state.main.name = state.name;
+      // 遊び直すあいだだけの条件（REPLAY の set）：前に遊び直した仲間の条件は外し、この仲間の条件を付ける
+      const before = toArray(state.main.flags);
+      state.flags = state.flags.filter((f) => !REPLAY_SET.has(f) || before.includes(f));
+      for (const f of toArray(r.set)) if (!state.flags.includes(f)) state.flags.push(f);
     }
     // メッセージ画面（iPhone）で選んだときも、前の会話を消してから始める
     currentView = "";
@@ -4074,6 +4120,7 @@
   //   メニューは、タイトル画面の上に開く（「◀ もどる」で、おたのしみ）
   function endReplay() {
     state.replayUntil = null;
+    state.replayWho = null;
     if (state.main) {
       Object.assign(state, state.main);
       state.main = null;
@@ -4253,6 +4300,7 @@
     if (!st.main || typeof st.main !== "object" || !SCN[st.main.scene]) st.main = null;
     else if (!Array.isArray(st.main.flags)) st.main.flags = st.flags.slice();
     if (typeof st.replayUntil !== "string" || !SCN[st.replayUntil] || !st.main) st.replayUntil = null;
+    if (!st.replayUntil || !replayRow(st.replayWho)) st.replayWho = null;
     // 数えている回数：0 以上の整数だけを残す
     const counts = {};
     if (st.counts && typeof st.counts === "object") {
@@ -4284,6 +4332,7 @@
   function resume(save) {
     loadState(save);
     state.replayUntil = null;
+    state.replayWho = null;
     if (state.main) {
       Object.assign(state, state.main);
       state.main = null;
@@ -4748,6 +4797,18 @@
         if (r.scene && r.until === r.scene) errors.push(`${at}：until（終える場面）が、始める場面と同じです。`);
         else if (SCN[r.until] && SCN[r.scene] && deviceOf(r.until) !== deviceOf(r.scene)) warnings.push(`${at}：until の場面「${r.until}」は、始める場面とちがう端末の場面です。`);
       }
+      // 最終章を終えたあとの遊び直しだけで使う項目（set・detour・name）
+      if (r.set !== undefined && !toArray(r.set).every((f) => typeof f === "string" && f)) errors.push(`${at}：set は、条件の名前（"indoor" など）で書いてください。`);
+      if (r.detour !== undefined) {
+        if (!r.detour || typeof r.detour !== "object" || Array.isArray(r.detour)) errors.push(`${at}：detour は、{ "進む場面": "代わりに進む場面" } のように書いてください。`);
+        else for (const [from, to] of Object.entries(r.detour)) {
+          check(from, `${at} の detour`);
+          check(to, `${at} の detour`);
+        }
+      }
+      if (r.skipNow !== undefined && typeof r.skipNow !== "boolean") errors.push(`${at}：skipNow は、true か false にしてください。`);
+      if ((r.set !== undefined || r.detour !== undefined || r.name !== undefined || r.skipNow !== undefined) && r.until === undefined) warnings.push(`${at}：set・detour・name・skipNow は、until を書いた仲間だけで使います（最終章を終えたあとの遊び直し）。`);
+      if (r.name !== undefined && typeof r.name !== "boolean") errors.push(`${at}：name は、true か false にしてください。`);
     });
     // クリア後のおたのしみ（BONUS）：強いモードの始める場面
     for (const [id, sc] of Object.entries(SCN)) {
