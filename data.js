@@ -1433,13 +1433,11 @@ const SCENES = {
     lines: [
       { unless: ["indoor", "pcReplay"], text: "イーブイ：……{name}、聞こえる？　声がちょっと遠いけど、大丈夫そう。" },
       "サンダースが会話に参加しました",
-      { unless: ["indoor", "pcReplay"], text: "サンダース：おっそーい！　待ってるあいだに、駅を3周しちゃったよ！" },
+      { unless: "indoor", text: "サンダース：おっそーい！　待ってるあいだに、駅を3周しちゃったよ！" },
       { if: "indoor", text: "サンダース：おっそーい！　待ちきれなくて、窓の外まで走ってきちゃったよ！" },
       { if: "indoor", text: "サンダース：姿は見せられないけど、窓ごしなら話せるぜ！" },
-      // 最終章を終えたPCで遊び直すとき（REPLAY の pcReplay）：家の日として始める（上の indoor の2行と同じ文）
-      //   クイズの導入（下の「3周もすると…」）と問題は、外へ出た日の形（10問）。Q1 の前の「スマホはポケットにな」は出さない
-      { if: "pcReplay", text: "サンダース：おっそーい！　待ちきれなくて、窓の外まで走ってきちゃったよ！" },
-      { if: "pcReplay", text: "サンダース：姿は見せられないけど、窓ごしなら話せるぜ！" },
+      // 最終章を終えたPCで遊び直すとき（REPLAY の pcReplay）：あいさつ・クイズの導入・問題は、外へ出た日の形（10問）。
+      //   出さないのは、いちばん上のイーブイの「聞こえる？」と、Q1 の前の「スマホはポケットにな」（11/3 たかさんの決定：案1）
       "サンダース：オレはサンダース。電車って電気で走るんだぜ。オレと気が合いそうだろ？",
       { unless: "indoor", text: "サンダース：3周もすると、いろいろ気づくんだよな。よし、問題だ！" },
       { if: "indoor", text: "サンダース：窓の外を走りながら、電車のことを考えてたんだ。よし、問題だ！" },
@@ -2519,6 +2517,7 @@ const KEYWORDS = {
 //    set   : 遊び直すあいだだけ付ける条件（終えたら、遊ぶ前の条件にもどる）
 //            pcReplay は、PCで遊び直す iPhone の場面の目印（3-1 のサンダースの文を、PC用にする）
 //    detour: { "進む場面": "代わりに進む場面" }。その場面へ進む所で、代わりの場面へ進む（シャワーズの浴室）
+//    skipNow: true → 入力欄の「見つからない」などのボタン（skip）を、まちがえる前から出す（2-6 のカード・2-5続きの鏡）
 //    name  : true → 名前の入力欄に、名前を最初から入れておく（2-4 のブラッキー）
 //            pc-images/name.js の guess（なければ names の1つ目）。name.js がないときは、今の名前 {name}
 //            入れた名前は、遊び直しのあいだだけ使い、終えたら元の名前にもどす
@@ -2543,12 +2542,13 @@ const REPLAY = [
   // シャワーズ：部屋の場面のあと、ブースターの場面（flareon_find）をはさまずに、PC用の浴室（vaporeon_bath_pc）へ。
   //   言葉のあと、2-7 の場面（phone_to_pc）の前で終える
   { who: "vaporeon", scene: "vaporeon_find", label: "2-5　部屋", until: "phone_to_pc",
-    set: ["pcReplay"], detour: { flareon_find: "vaporeon_bath_pc" } },
+    set: ["pcReplay"], detour: { flareon_find: "vaporeon_bath_pc" }, skipNow: true },
   // ブースター：言葉と「お風呂、ぼくが温めておくね」のあと、浴室の場面（vaporeon_bath）の前で終える
-  { who: "flareon",  scene: "flareon_find",  label: "2-6　台所", until: "vaporeon_bath", set: ["pcReplay"] },
+  //   カードの「見つからない」は、まちがえる前から出す
+  { who: "flareon",  scene: "flareon_find",  label: "2-6　台所", until: "vaporeon_bath", set: ["pcReplay"], skipNow: true },
   // サンダースとリーフィアは、3-0 の出発からではなく、それぞれの場面から始める
   // サンダース：言葉のあと、リーフィアへ向かう文（jolteon_bye）の前で終える
-  //   最終章を終えたPCでは、家の日として始め、おまけクイズは10問（jolteon_meet の pcReplay）
+  //   最終章を終えたPCでは、外へ出た日の形で、おまけクイズは10問（jolteon_meet の pcReplay）
   { who: "jolteon",  scene: "jolteon_meet",  label: "3-1　駅", until: "jolteon_bye", set: ["pcReplay"] },
   // リーフィア：言葉のあと、「パソコンで『ただいま』」の文（leafeon_bye）の前で終える
   //   公園の気配探しは通らない。最終章を終えたPCでは、家の日（indoor）として始める

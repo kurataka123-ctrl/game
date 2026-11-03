@@ -3670,7 +3670,10 @@
       ? () => view.say(toArray(hintList[Math.min(hints, hintList.length - 1)]), () => askInput(sc, view, misses, hints + 1), false)
       : null;
     const skip = spec.skip && spec.skip.next ? spec.skip : null;
-    const onSkip = skip && misses >= (skip.after == null ? 2 : skip.after)
+    // 最終章を終えたあとの遊び直し（REPLAY の skipNow）では、まちがえる前から出す（PCでは、カードや鏡を見に行けないため）
+    const replaying = state.replayUntil ? replayRow(state.replayWho) : null;
+    const skipAfter = replaying && replaying.skipNow === true ? 0 : skip && skip.after == null ? 2 : skip && skip.after;
+    const onSkip = skip && misses >= skipAfter
       ? () => view.say(toArray(skip.reply), () => runScene(skip.next), true)
       : null;
     // back：「もどる」ボタンで、その場面へもどる（選択肢を選び直せるように）
@@ -4803,7 +4806,8 @@
           check(to, `${at} の detour`);
         }
       }
-      if ((r.set !== undefined || r.detour !== undefined || r.name !== undefined) && r.until === undefined) warnings.push(`${at}：set・detour・name は、until を書いた仲間だけで使います（最終章を終えたあとの遊び直し）。`);
+      if (r.skipNow !== undefined && typeof r.skipNow !== "boolean") errors.push(`${at}：skipNow は、true か false にしてください。`);
+      if ((r.set !== undefined || r.detour !== undefined || r.name !== undefined || r.skipNow !== undefined) && r.until === undefined) warnings.push(`${at}：set・detour・name・skipNow は、until を書いた仲間だけで使います（最終章を終えたあとの遊び直し）。`);
       if (r.name !== undefined && typeof r.name !== "boolean") errors.push(`${at}：name は、true か false にしてください。`);
     });
     // クリア後のおたのしみ（BONUS）：強いモードの始める場面
