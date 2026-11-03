@@ -3948,14 +3948,15 @@
 
   // 「なかまの場面へ」に並べる仲間：クリアした仲間が1匹でもいる端末の仲間（まだの仲間は done: false）
   //   ふつうは、その端末の仲間だけが並ぶ（PCの3匹か、iPhoneの5匹）
-  //   最終章を終えたあと（PC）は、iPhoneの5匹も並べる（「ただいま」で8匹と会った記録を持つため。設計書 第11節）
+  //   最終章を終えたあと（PC）は、8匹とも並べる（「ただいま」で8匹と会った記録を持つため。設計書 第11節）
+  //     合言葉やテスト用メニューで最終章へとび、PCの3匹の言葉をこの端末で受けとっていなくても、3匹を並べる
   function replayRows(st) {
     const cleared = toArray(st && st.cleared);
     const finished = Boolean(st && st.finished);
     const rows = RP.filter((r) => r && CHARS[r.who] && SCN[r.scene])
       .map((r) => {
         const device = deviceOf(r.scene);
-        return { r, device, done: cleared.includes(r.who) || (finished && device === "phone") };
+        return { r, device, done: finished || cleared.includes(r.who) };
       });
     const devices = new Set(rows.filter((x) => x.done).map((x) => x.device));
     return rows.filter((x) => devices.has(x.device));
