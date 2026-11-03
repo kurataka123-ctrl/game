@@ -356,6 +356,32 @@ button { font: inherit; color: inherit; touch-action: manipulation; }
   transition: opacity 0ms linear;
 }
 
+/* 文のあとの演出（data.js の場面の finale。4-6 エピローグ）
+   会話の枠をゆっくり消して、ゲーム画面の部分を広くする（9匹の並びも、ゆっくり下へ動く）。もどすときは、すぐにもどる */
+.novel.finale .textbox {
+  min-height: 0;
+  margin-bottom: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+  border-width: 0;
+  opacity: 0;
+  pointer-events: none;
+  transition: min-height .9s ease, margin .9s ease, padding .9s ease, border-width .9s ease, opacity .5s ease;
+}
+.novel.finale .textbox .text { min-height: 0; transition: min-height .9s ease; }
+/* クリックを待つ印（会話の枠を消しているとき）。会話の枠の ▼ と同じ点滅 */
+.stage-mark {
+  position: absolute;
+  right: 20px;
+  bottom: 14px;
+  z-index: 4;
+  color: #f3e6c8;
+  font-size: 16px;
+  text-shadow: 0 1px 4px rgba(0, 0, 0, .7);
+  pointer-events: none;
+  animation: blink 1s steps(2) infinite;
+}
+
 /* 選択肢・入力欄が出ている間は、キャラクターを上によせて小さくする */
 .stage.has-layer .chars { align-items: flex-start; padding-top: 3cqh; }
 .stage.has-layer .char-face {
@@ -409,6 +435,48 @@ button { font: inherit; color: inherit; touch-action: manipulation; }
   animation: blink 1s steps(2) infinite;
 }
 @keyframes blink { 50% { opacity: 0; } }
+
+/* バックログのボタン（会話の枠の左下。PC）。文を出さずに待っているあいだ（4-3 の余韻など）は、うすくして押せなくする */
+.log-btn {
+  position: absolute;
+  left: 14px;
+  bottom: 5px;
+  padding: 1px 12px;
+  min-height: 0;
+  border: 1px solid #d9c196;
+  border-radius: 999px;
+  background: #fff;
+  color: #8a6a2e;
+  font-size: 12px;
+  line-height: 1.6;
+  letter-spacing: .08em;
+  cursor: pointer;
+  transition: opacity .3s;
+}
+.log-btn:hover { background: #fff6e2; }
+.novel.pausing .log-btn { opacity: .3; pointer-events: none; }
+
+/* バックログの一覧（重ねて表示する画面） */
+.panel.log-panel { width: min(680px, 100%); }
+.log-list {
+  flex: 1 1 auto;
+  min-height: 120px;
+  max-height: min(62vh, 440px);
+  overflow-y: auto;
+  padding: 10px 14px;
+  border-radius: 12px;
+  border: 1px solid #eadcbf;
+  background: #fff;
+  outline: none;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.log-row { display: flex; flex-direction: column; gap: 2px; text-align: left; line-height: 1.7; font-size: 15px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.log-name { align-self: flex-start; padding: 0 10px; border-radius: 999px; border: 2px solid var(--c, #999); font-size: 12px; font-weight: 700; line-height: 1.6; }
+.log-row.narration { color: var(--ink-soft); }
+.log-row.picked { color: #2f6fd0; font-weight: 700; }
+.log-empty { margin: 0; color: var(--ink-soft); font-size: 14px; }
 
 /* 選択肢・入力欄など（会話の枠の上に出る） */
 .stage-layer {
@@ -1747,6 +1815,20 @@ button { font: inherit; color: inherit; touch-action: manipulation; }
 .end-text { margin: 0 0 20px; white-space: pre-wrap; line-height: 1.9; color: #4a4450; }
 .end-buttons { display: flex; flex-direction: column; gap: 10px; align-items: center; }
 .end-buttons .btn { width: min(320px, 100%); }
+/* スタッフの名前（data.js の end の credits。4-6 のエピローグの終わりの画面） */
+.end-card.has-credits { padding-top: 34px; }
+.end-card.has-credits .end-title { margin-bottom: 4px; }
+.end-card.has-credits .end-text {
+  margin: 0 0 18px;
+  font-family: Georgia, "Times New Roman", serif;
+  font-style: italic;
+  font-size: 32px;
+  line-height: 1.4;
+  letter-spacing: .08em;
+  color: #9a7432;
+}
+.end-credits { display: flex; flex-direction: column; gap: 4px; margin: 0 0 24px; }
+.end-credit { margin: 0; font-size: 16px; line-height: 1.8; color: #4a4450; white-space: pre-wrap; overflow-wrap: anywhere; }
 
 /* ---------------- はじめの演出（1-1。data.js の場面の intro） ----------------
    画面を暗くする幕。濃さと時間は engine.js が決める。演出のあいだだけ、クリックを受けとる（飛ばすため） */
@@ -1854,6 +1936,35 @@ button.replay-cell:active { transform: scale(.97); }
   .replay-cell .party-info { flex-direction: column; align-items: flex-start; gap: 0; }
   .replay-cell .party-name { width: auto; }
 }
+
+/* クリア後のおたのしみ（タイトル画面。PCのみ） */
+.bonus-menu { display: flex; flex-direction: column; gap: 10px; align-items: center; }
+.bonus-menu .btn { width: min(340px, 100%); }
+
+/* 回想ギャラリー（おたのしみ）：見つかった絵を並べる。クリックで大きく見る */
+.panel.gallery-panel, .panel.gallery-view { width: min(860px, 100%); }
+.gallery-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; }
+.gallery-grid > .panel-note { grid-column: 1 / -1; }
+.gallery-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px;
+  border: 1px solid #e3d3b2;
+  border-radius: 12px;
+  background: #fff;
+  font: inherit;
+  color: var(--ink);
+  cursor: pointer;
+  transition: transform .12s, background-color .2s;
+}
+.gallery-cell:hover { background: #fff6e2; }
+.gallery-cell:active { transform: scale(.97); }
+.gallery-thumb { display: block; width: 100%; aspect-ratio: 16 / 9; object-fit: contain; background: #000; border-radius: 8px; }
+.gallery-label { font-size: 13px; font-weight: 700; }
+.gallery-frame { background: #000; border-radius: 12px; overflow: hidden; }
+.gallery-big { display: block; width: 100%; height: min(56vh, 460px); object-fit: contain; }
+.gallery-cap { margin: 0; font-weight: 700; }
 
 /* 言葉（最後の謎で使う。文字は光らせない） */
 .word.big { display: block; font-size: clamp(26px, 7vw, 34px); font-weight: 700; letter-spacing: .08em; line-height: 1.4; }
@@ -2000,11 +2111,15 @@ button.replay-cell:active { transform: scale(.97); }
 .debug-present { flex-direction: column; align-items: stretch; }
 .debug-error { color: #a1122b; }
 .debug-warn { color: #8a5a00; }
+.debug-expected { color: #2f6b3a; }   /* 戦いの点検：想定どおり（強いモードの勝てない組み合わせ） */
 
 /* ---------------- 雪（data.js の場面の snow。エピローグと、そのあとの終わりの画面） ---------------- */
 /*  雪の位置・大きさ・速さは engine.js が決める（--x 横の位置 / --s 大きさ / --d 落ちる時間 / --sway 横のゆれ / --o こさ） */
 .snow-layer { position: absolute; inset: 0; z-index: 2; overflow: hidden; pointer-events: none; container-type: size; }
 .end-screen .snow-layer { z-index: 0; }   /* 終わりの画面では、カードのうしろにふらせる */
+/* 物語の画面では、絵（.stage-picture）と暗転（.stage-shade）より手前にふらせる。ふり始めは、ふわっと出す */
+.stage > .snow-layer { z-index: 3; animation: snow-in 1.2s ease-out both; }
+@keyframes snow-in { from { opacity: 0; } to { opacity: 1; } }
 .snow-layer i {
   position: absolute;
   top: -12px;

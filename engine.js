@@ -31,6 +31,7 @@
   const BT = tryGet(() => BATTLES) || {};
   const MV = tryGet(() => MOVES) || {};
   const RP = tryGet(() => REPLAY) || [];   // クリアしたなかまへ戻るメニュー（設計書 第11節）
+  const BN = tryGet(() => BONUS) || {};    // クリア後のおたのしみ（設計書 第11節。PCのみ）
   // 音を鳴らす仕組み（sound.js）。読み込めなかったときは、音なしで遊べるようにする
   const SND = window.SOUND || {
     init() {}, play: () => false, preview() {}, ambient() {}, setMode() {}, isOn: () => false, setOn() {},
@@ -48,6 +49,9 @@
   const hashQuery = new URLSearchParams(location.hash.replace(/^#/, ""));
   const DEBUG = query.has("debug") || hashQuery.has("debug");
   const TOUCH = window.matchMedia && window.matchMedia("(pointer: coarse)").matches;
+  // PCで index.html を直接開いたとき（file://）。公開したページ（iPhone など）では false
+  //   data.js の条件「pcDirect」（4-6 の終わりの画面の「友情出演」など）に使う
+  const PC_DIRECT = location.protocol === "file:";
 
   // ==============================================================
   // 2. 小さな道具
@@ -79,7 +83,8 @@
   //   {station} など  → SETTINGS.hidden に「表示用に隠す」形で書いた文字
   function fill(t) {
     return String(t == null ? "" : t).replace(/\{(\w+)\}/g, (whole, key) => {
-      if (key === "name") return state.name || S.defaultName || "";
+      // 名前を入れる前（「はじめから」のあと）に、おたのしみを遊んだときは、クリア後の記録の名前を使う
+      if (key === "name") return state.name || (state.finished && hasBonus() && bonusRec.name) || S.defaultName || "";
       if (LOCAL[key]) return localText(key);
       const hidden = S.hidden && S.hidden[key];
       return hidden ? unhide(hidden) : whole;
@@ -123,7 +128,9 @@
   // 条件つきの行・選択肢
   //   { if: "indoor" } はその条件のときだけ、{ unless: "indoor" } はそうでないときだけ出す
   //   条件の名前は、set で記録したもの（state.flags）か、SETTINGS の true / false
+  //   pcDirect は、PCで index.html を直接開いたとき（4-6 の終わりの画面の「友情出演」）
   function flagOn(name) {
+    if (name === "pcDirect") return PC_DIRECT;
     return state.flags.includes(name) || S[name] === true;
   }
   function visible(item) {
@@ -293,25 +300,32 @@
 
   // 名前の確認（1-1。data.js の input の check）に使う一覧：pc-images/name.js（書き方は name.sample.js）
   //   PCで index.html を直接開いたとき（file://）だけ読みこむ。公開したページ（iPhone）では読みこまない。
-  //   結果：{ list, status }。status は "ok"（使える）/ "none"（ファイルがない）/ "empty"（NAME_LIST がない・names が空）/ "off"（直接開いていない）
+  //   結果：{ list, status, call }。status は "ok"（使える）/ "none"（ファイルがない）/ "empty"（NAME_LIST がない・names が空）/ "off"（直接開いていない）
   //   list が null のときは、名前を確認せずに進む
+  //   call：強いモード（おたのしみ）で、パパが呼ぶ呼び名（NAME_LIST の call。技の名前「○○ちゃーん」の○○）。なければ ""
   let nameLoad = null;
+  let callLoaded = "";
   function loadNames() {
     if (!nameLoad) {
       nameLoad = new Promise((resolve) => {
-        if (!ART_DIR) { resolve({ list: null, status: "off" }); return; }
+        if (!ART_DIR) { resolve({ list: null, status: "off", call: "" }); return; }
         const s = document.createElement("script");
         s.onload = () => {
-          const list = readNames(tryGet(() => NAME_LIST));
-          resolve({ list, status: list ? "ok" : "empty" });
+          const raw = tryGet(() => NAME_LIST);
+          const list = readNames(raw);
+          const call = raw && typeof raw === "object" && typeof raw.call === "string" ? raw.call.trim() : "";
+          callLoaded = call;
+          resolve({ list, status: list ? "ok" : "empty", call });
         };
-        s.onerror = () => resolve({ list: null, status: "none" });
+        s.onerror = () => resolve({ list: null, status: "none", call: "" });
         s.src = `${ART_DIR}/name.js`;
         document.head.append(s);
       });
     }
     return nameLoad;
   }
+  // パパが呼ぶ呼び名（name.js の call）。読みこみが終わっていないときや、ないときは ""
+  const nameCall = () => callLoaded;
   // name.js の NAME_LIST を、比べやすい形にそろえる（names が1つもなければ null）
   //   names：下の名前の一覧 / family：名字の一覧（名字＋名前でも通す）/ guess：「もしかして」で聞く呼び名（なければ names の1つ目）
   function readNames(raw) {
@@ -343,11 +357,57 @@
     },
     save(data) {
       try { localStorage.setItem(SAVE_KEY, JSON.stringify(data)); } catch (e) { /* 保存できない環境でも遊べる */ }
+      if (data && data.finished === true) keepBonus(data);
     },
     clear() {
       try { localStorage.removeItem(SAVE_KEY); } catch (e) { /* 何もしない */ }
     },
   };
+  // クリア後の記録（おたのしみ）：進み具合の記録とは別の保存名に置く
+  //   「はじめから」で進み具合の記録を消しても、こちらは残す（おたのしみ・強いモード・パパ・なかまの場面へ）
+  //   中身：finished（最終章を終えた）・cleared（クリアした仲間）・counts（強いモードの負けた回数など）・name（主人公の名前）
+  //   進み具合の記録を保存するとき、最終章を終えていれば、ここにも足していく（減らさない）
+  const BONUS_KEY = SAVE_KEY + "-bonus";
+  const bonusStore = {
+    load() {
+      try {
+        const data = JSON.parse(localStorage.getItem(BONUS_KEY));
+        return data && typeof data === "object" ? data : {};
+      } catch (e) { return {}; }
+    },
+    save(data) {
+      try { localStorage.setItem(BONUS_KEY, JSON.stringify(data)); } catch (e) { /* 保存できない環境でも遊べる */ }
+    },
+    clear() {
+      try { localStorage.removeItem(BONUS_KEY); } catch (e) { /* 何もしない */ }
+    },
+  };
+  let bonusRec = bonusStore.load();
+  const strList = (v) => (Array.isArray(v) ? v.filter((x) => typeof x === "string") : []);
+  const unionList = (a, b) => Array.from(new Set(strList(a).concat(strList(b))));
+  // 回数は、多いほうを残す（減らさない）
+  function maxCounts(a, b) {
+    const out = {};
+    for (const src of [a, b]) {
+      if (!src || typeof src !== "object") continue;
+      for (const [k, v] of Object.entries(src)) {
+        const n = Math.floor(Number(v));
+        if (n > 0 && !(out[k] >= n)) out[k] = n;
+      }
+    }
+    return out;
+  }
+  function keepBonus(st) {
+    const b = bonusRec;
+    bonusRec = {
+      finished: true,
+      cleared: unionList(b.cleared, st.cleared),
+      counts: maxCounts(b.counts, st.counts),
+      name: (typeof st.name === "string" && st.name) || (typeof b.name === "string" ? b.name : ""),
+    };
+    bonusStore.save(bonusRec);
+  }
+  const hasBonus = () => bonusRec.finished === true;
   // 遊ぶ前に、このPCで入れておく呼び名（data.js の SETTINGS.local。友達の呼び名など）
   //   公開ページに書かないため、この端末のブラウザだけに記録する。記録（セーブ）を消しても残る
   const LOCAL = S.local || {};
@@ -392,10 +452,14 @@
   //   見つけた公園の id・「気配を見つけたことにする」で増やした数・続けて見つからなかった回数（現在地は記録しない）
   // cleared：この端末で、言葉（give）を受けとった仲間（クリアした仲間。「なかまの場面へ」に出す）
   // main：「なかまの場面へ」で遊び直している間だけ、いちばん先まで進んだ所を覚えておく（MAIN_KEYS の項目）
+  // finished：最終章を終えた（4-6 の終わりの画面を出した。data.js の end の complete）。タイトル画面に「おたのしみ」を出す
+  // replayUntil：最終章を終えたあとの「なかまの場面へ」で、遊び直しを終える場面（data.js の REPLAY の until）。
+  //   その場面へ進む所で、メニューへ戻る。遊び直していないときは null
+  // counts：日をまたいでも数える回数（強いモードで、パパなしで負けた回数など。data.js の BATTLES の retreat の count）
   const freshState = () => ({
     scene: null, met: [], words: [], flags: [], name: "", chapter: "", bg: "", atEnd: false, walk: null,
     parks: [], parkManual: 0, parkMisses: 0,
-    cleared: [], main: null,
+    cleared: [], main: null, finished: false, replayUntil: null, counts: {},
   });
   let state = freshState();
   let gen = 0;            // 場面が変わるたびに増える番号（古いタイマーを無効にする）
@@ -482,13 +546,21 @@
     const shade = el("div", { class: "stage-shade", "aria-hidden": "true" });
     const layer = el("div", { class: "stage-layer" });
     const draft = el("div", { class: "draft-badge", text: T("draft"), hidden: true });
-    const stage = el("div", { class: "stage" }, chars, roomBox, gridBox, puzzleBox, battleBox, houseBox, picture, shade, layer, draft);
+    // クリックを待つ印（会話の枠を消しているとき。4-6 エピローグの最後のイラスト）
+    const stageMark = el("div", { class: "stage-mark", text: "▼", hidden: true, "aria-hidden": "true" });
+    const stage = el("div", { class: "stage" }, chars, roomBox, gridBox, puzzleBox, battleBox, houseBox, picture, shade, layer, draft, stageMark);
     const name = el("div", { class: "nameplate", hidden: true });
     const text = el("div", { class: "text" });
     const mark = el("div", { class: "next-mark", text: "▼", hidden: true, "aria-hidden": "true" });
-    const box = el("div", { class: "textbox", tabindex: "0" }, name, text, mark);
+    // バックログのボタン（会話の枠の左下）。押しても、文は進めない。入力欄の文字を選んだままにする（押したときに、入力欄から外さない）
+    const logBtn = el("button", {
+      class: "log-btn", type: "button", text: T("logButton"), title: T("logHelp"),
+      onmousedown: (e) => e.preventDefault(),
+      onclick: (e) => { e.stopPropagation(); openLog(); },
+    });
+    const box = el("div", { class: "textbox", tabindex: "0" }, name, text, mark, logBtn);
     const root = el("section", { class: "screen novel" }, topbar, stage, box);
-    return { root, chapter, partyBtn, chars, roomBox, gridBox, puzzleBox, battleBox, houseBox, picture, pictureImg, shade, layer, draft, stage, name, text, mark, box };
+    return { root, chapter, partyBtn, chars, roomBox, gridBox, puzzleBox, battleBox, houseBox, picture, pictureImg, shade, layer, draft, stageMark, stage, name, text, mark, box };
   }
 
   // 文字送りの短い音を鳴らさない文字（空白・句読点・「…」・かっこなど）
@@ -529,6 +601,20 @@
   // exploreNext：地図を調べ終えたあと、先へ進む関数 / house：家全体の地図（2-7・4-3・4-5）
   // picture：いま出している行の絵（画像の場所。出していなければ ""）/ picTimer：絵を出す・消すときの暗転の時計
   const NV = { lines: [], idx: 0, then: null, hold: true, typer: null, mode: "idle", shown: [], auto: 0, onLine: null, autoTimer: null, exploreNext: null, house: null, glow: false, picture: "", picTimer: null };
+
+  // ---- バックログ（PC。設計書 第11節）：今の場面で出た文を、あとから一覧で読みかえす ----
+  //   場面が変わるたびに空にする（runScene）。記録するのは、画面に出た文・選んだ答え・入れた答え・もらった言葉
+  //   { who, text }：文（who がなければ地の文）/ { picked }：選んだ・入れた答え
+  const BACKLOG = [];
+  const BACKLOG_MAX = 400;
+  function logAdd(entry) {
+    BACKLOG.push(entry);
+    if (BACKLOG.length > BACKLOG_MAX) BACKLOG.splice(0, BACKLOG.length - BACKLOG_MAX);
+  }
+  // 文を出さずに待っている間（余韻・絵の暗転）の印。そのあいだは、ログを開けない（ログのボタンもうすくする）
+  function setPausing(on) {
+    novel.root.classList.toggle("pausing", Boolean(on));
+  }
 
   // 選択肢・入力欄などを表示する（null で消す）
   // 表示中はキャラクターを上によせて、重ならないようにする
@@ -664,6 +750,7 @@
     clearTimeout(NV.picTimer);
     if (NV.typer) { NV.typer.cancel(); NV.typer = null; }
     NV.mode = "pause";
+    setPausing(true);
     novel.mark.hidden = true;
     novel.text.textContent = "";   // 前の行の文は、暗くなり始めるときに消す
     setShade(true, half);
@@ -688,6 +775,7 @@
     const lines = NV.lines;
     clearTimeout(NV.autoTimer);
     NV.mode = "pause";
+    setPausing(true);
     novel.mark.hidden = true;
     findPicture(ln.image).then(() => {
       if (token !== gen || NV.lines !== lines || NV.mode !== "pause") return;
@@ -728,14 +816,29 @@
     if (wait > 0) {
       const token = gen;
       const lines = NV.lines;
+      const alive = () => token === gen && NV.lines === lines && NV.mode === "pause";
       clearTimeout(NV.autoTimer);
       NV.mode = "pause";
+      setPausing(true);   // 余韻（4-3）などのあいだは、ログを開けない
       novel.mark.hidden = true;
-      NV.autoTimer = setTimeout(() => {
-        if (token !== gen || NV.lines !== lines || NV.mode !== "pause") return;
+      // 次の文の行に絵（image）があるときは、絵を出す暗転（場面の imageFade）も、待つ時間の中に数える
+      //   （4-3 の余韻：イラストがあるときも、ないときも、最初の文が出るまでを wait の長さにそろえる）
+      //   絵が見つからなかったときは、残りの時間を待ってから文を出す
+      const next = NV.lines[i];
+      const sc = SCN[state.scene] || {};
+      const fade = next && next.image && ART_DIR && currentView === "novel"
+        ? Math.min(wait, Number(sc.imageFade) >= 0 ? Number(sc.imageFade) : 1000) : 0;
+      const go = () => {
+        if (!alive()) return;
         NV.mode = "talk";
         nvText(i);
-      }, wait);
+      };
+      NV.autoTimer = setTimeout(() => {
+        if (!alive()) return;
+        const pic = fade ? pictureOf(next) : "";
+        if (!fade || pic === undefined || pic !== NV.picture) { go(); return; }
+        NV.autoTimer = setTimeout(go, fade);
+      }, wait - fade);
       return;
     }
     nvText(i);
@@ -760,7 +863,9 @@
     const lines = NV.lines;
     let doneNow = false;
     clearTimeout(NV.autoTimer);
+    setPausing(false);
     setSpeaker(ln.who, glowOf(ln), ln.dim);
+    logAdd({ who: ln.who, text: ln.text });   // バックログに残す（今の場面で出た文）
     if (ln.sound) SND.play(ln.sound);
     if (NV.onLine) NV.onLine(i);
     novel.mark.hidden = true;
@@ -786,6 +891,7 @@
 
   function finishSay() {
     clearTimeout(NV.autoTimer);
+    setPausing(false);
     NV.mode = "idle";
     novel.mark.hidden = true;
     const then = NV.then;
@@ -797,9 +903,13 @@
   //   from："stage"（絵のところ）/ "box"（会話の枠）/ "key"（Enter・スペース）
   function nvAdvance(from) {
     if (currentView !== "novel") return;
+    // ログ・メニューなどを開いている間は進めない（戦いの文の自動送りも、閉じてからクリックで進む）
+    if (overlay.classList.contains("open")) return;
     if (NV.mode === "explore" && NV.typer) { NV.typer.skip(); return; }
     // 地図を調べ終えたあとは、会話の枠（または Enter）でも先へ進める（絵のところは、調べまちがいがあるので進まない）
     if (NV.mode === "explore" && NV.exploreNext && from !== "stage") { NV.exploreNext(); return; }
+    // 文のあとの演出（finale。4-6 エピローグ）：雪と絵のあいだは進まない。そのあとは、クリック・Enter で先へ
+    if (NV.mode === "finale") { if (NV.finaleNext) NV.finaleNext(); return; }
     if (NV.mode !== "talk") return;
     if (NV.typer) { NV.typer.skip(); return; }
     if (NV.lines.slice(NV.idx + 1).some((l) => !l.effect)) nvShow(NV.idx + 1);
@@ -821,6 +931,10 @@
       NV.grid = null;
       NV.battle = null;
       NV.exploreNext = null;
+      NV.finaleNext = null;
+      setPausing(false);
+      novel.root.classList.remove("finale");   // 文のあとの演出（finale）で消した会話の枠を、もとにもどす
+      novel.stageMark.hidden = true;
       if (NV.house) NV.house.stop();
       NV.house = null;
       clearPicture();
@@ -921,7 +1035,7 @@
       const box = el("div", { class: "choices" },
         list.map((c) => el("button", {
           class: "choice", type: "button", text: fill(c.text),
-          onclick: (e) => { e.stopPropagation(); setLayer(null); onPick(c); },
+          onclick: (e) => { e.stopPropagation(); setLayer(null); logAdd({ picked: fill(c.text) }); onPick(c); },
         })));
       setLayer(box);
     },
@@ -937,6 +1051,7 @@
           if (!value) return;
           field.blur();
           setLayer(null);
+          logAdd({ picked: value });
           // 前の文を消しておく（正解のあとの演出の間に、まちがえたときの返事などが残らないように）
           novel.text.textContent = "";
           setSpeaker(null);
@@ -968,6 +1083,7 @@
     reveal(id, then) {
       const c = CHARS[id] || {};
       novel.mark.hidden = true;
+      logAdd({ who: null, text: `${T("wordGet")}　${T("wordFrom", { who: charName(c) })}「${c.word || ""}」` });
       openOverlay(el("div", { class: "panel word-panel", style: `--c:${c.color || "#ccc"}` },
         el("div", { class: "word-get", text: T("wordGet") }),
         el("div", { class: "word-from" },
@@ -976,6 +1092,57 @@
         wordNode(c.word, "big"),
         el("p", { class: "panel-note", text: T("wordNote") }),
         el("button", { class: "btn primary", type: "button", text: T("ok"), onclick: closeOverlay })), then);
+    },
+
+    // 文のあとの演出（data.js の場面の finale。4-6 エピローグ）
+    //   1. 会話の枠をゆっくり消して、雪をふらせる（いまの画面〔9匹が並ぶ画面〕のまま）
+    //   2. snow ミリ秒たったら、暗転（fade ミリ秒）をはさんで、最後のイラスト（image）に切りかえる
+    //      絵は、PCで直接開いて、画像があるときだけ。ないときは、9匹が並ぶ画面のまま
+    //   3. クリック・Enter を待ってから then（終わりの画面）。1と2のあいだは、クリックしても進まない
+    finale(sc, then) {
+      const f = sc.finale && typeof sc.finale === "object" ? sc.finale : {};
+      const token = gen;
+      const alive = () => token === gen && NV.mode === "finale";
+      const snowMs = Number(f.snow) >= 0 ? Number(f.snow) : 3000;
+      const half = (Number(f.fade) >= 0 ? Number(f.fade) : 1000) / 2;
+      const image = typeof f.image === "string" ? f.image.trim() : "";
+      const found = image && ART_DIR ? findPicture(image) : Promise.resolve("");
+      clearTimeout(NV.autoTimer);
+      clearTimeout(NV.picTimer);
+      if (NV.typer) { NV.typer.cancel(); NV.typer = null; }
+      NV.mode = "finale";
+      NV.finaleNext = null;
+      setSpeaker(null);
+      novel.text.textContent = "";
+      novel.mark.hidden = true;
+      novel.root.classList.add("finale");   // 会話の枠を、ゆっくり消す（style.css の .novel.finale）
+      setSnow(novel.stage, true);
+      // クリック・Enter を待つ（画面の右下に ▼ を出す）
+      const ready = () => {
+        NV.picTimer = null;
+        if (!alive()) return;
+        novel.stageMark.hidden = false;
+        NV.finaleNext = () => {
+          NV.finaleNext = null;
+          novel.stageMark.hidden = true;
+          NV.mode = "idle";
+          then();
+        };
+      };
+      NV.picTimer = setTimeout(() => {
+        found.then((src) => {
+          if (!alive()) return;
+          if (!src) { ready(); return; }
+          setShade(true, half);
+          NV.picTimer = setTimeout(() => {
+            if (!alive()) return;
+            showPicture(src);
+            setShade(false, half);
+            // 絵が出たあと、少し間を置いてから、クリックを受けつける（文を読み進めていた勢いで、飛ばさないように）
+            NV.picTimer = setTimeout(ready, half + 800);
+          }, half);
+        });
+      }, snowMs);
     },
 
     // 地図を調べる
@@ -1019,6 +1186,7 @@
         const said = dark
           ? item.dark || (item.shine ? T("darkShine") : T("darkDefault", { item: item.name || "" }))
           : item.text || item.name || "";
+        logAdd({ who: null, text: fill(said) });
         const handle = typeInto(novel.text, fill(said), () => {
           doneNow = true;
           NV.typer = null;
@@ -1322,6 +1490,8 @@
       onSwipe(view.board, (d) => move(d, false));
       GRID.key = (e) => {
         const dir = KEY_DIRS[e.key];
+        // 人物と話している間（会話の文・選択肢）の ↑キーは、歩くのに使わない（バックログを開く）
+        if (dir && e.key === "ArrowUp" && NV.mode !== "walk") return false;
         if (dir) {
           move(dir, e.repeat);
           return true;
@@ -1370,6 +1540,25 @@
           },
         }) : null;
       };
+      // 負けたら、戦いを終えて、retreat の next の場面（強いモードの、仲間を集める所）へもどる
+      //   ヒント（retreat の hint）：条件に合うとき（パパが仲間にいないとき）だけ、負けた回数を数えて、回数に合うセリフを出す
+      //   回数は state.counts に残す（日をまたいでも数える）。回数が並べたセリフより多いときは、最後のセリフを毎回出す
+      const retreat = () => {
+        const rt = def.retreat;
+        const h = rt.hint && typeof rt.hint === "object" && visible(rt.hint) ? rt.hint : null;
+        let hint = [];
+        if (h && toArray(h.lines).length) {
+          const key = String(h.count || sc.battle);
+          const n = (Number(state.counts[key]) || 0) + 1;
+          state.counts[key] = n;
+          storage.save(state);
+          const list = toArray(h.lines);
+          hint = toArray(list[Math.min(n, list.length) - 1]);
+        }
+        GRID.key = null;
+        ui.menu.replaceChildren();
+        NovelView.say([...hint, ...toArray(rt.lines)], () => { if (alive()) runScene(rt.next); }, true);
+      };
       // 戦いを始める（仲間をえらぶ戦いなら、先にえらぶ）
       const begin = () => {
         if (!alive()) return;
@@ -1404,7 +1593,7 @@
           el("span", { class: "bt-cmd-key", text: String(i + 1), "aria-hidden": "true" }),
           withArt(el("span", { class: "bt-pick-face", text: (CHARS[id] && CHARS[id].emoji) || "？" }), id),
           el("span", { class: "bt-pick-name", text: whoName(id) }),
-          el("span", { class: "bt-pick-moves", text: battleMovesOf(def, id).map((m) => fill(MV[m].name || m)).join("・") })));
+          el("span", { class: "bt-pick-moves", text: battleMovesOf(def, id).map(moveName).join("・") })));
         const update = () => {
           for (const c of cards) c.classList.toggle("on", sel.includes(c.dataset.id));
           ok.disabled = sel.length !== base.choose;
@@ -1479,7 +1668,7 @@
           onclick: (e) => { e.stopPropagation(); choosePick(id); },
         },
           el("span", { class: "bt-cmd-key", text: String(k + 1), "aria-hidden": "true" }),
-          el("span", { class: "bt-cmd-name", text: fill(MV[id].name || id) }),
+          el("span", { class: "bt-cmd-name", text: moveName(id) }),
           MV[id].note ? el("span", { class: "bt-cmd-note", text: fill(MV[id].note) }) : null));
         const skip = i === first ? skipButton() : null;
         const foot = goBack || skip ? el("div", { class: "bt-menu-foot" },
@@ -1511,7 +1700,8 @@
       const turn = (picks) => {
         NV.mode = "talk";
         ui.menu.replaceChildren();
-        const r = battleTurn(b, st, picks);
+        // 乱数を使うのは、技の fail（強いモードのパパの「スマホに夢中」）だけ
+        const r = battleTurn(b, st, picks, false, Math.random);
         play(r.steps, () => {
           if (!alive()) return;
           st = r.state;
@@ -1521,6 +1711,10 @@
             return;
           }
           if (st.lost) {
+            if (def.retreat && def.retreat.next) {
+              retreat();
+              return;
+            }
             losses += 1;
             const lose = toArray(def.lose);
             const hint = lose.length ? toArray(lose[Math.min(losses, lose.length) - 1]) : [];
@@ -1680,7 +1874,7 @@
     const out = [];
     const used = new Set();
     for (const ev of toArray(sc.events)) {
-      if (!ev || !ev.npc || !eventOn(sc, ev)) continue;
+      if (!ev || !ev.npc || ev.hidden || !eventOn(sc, ev)) continue;   // hidden：姿を見せない人物（強いモードのパパ）
       for (const p of eventCells(ev)) {
         if (used.has(xy(p.x, p.y)) || !CHARS[p.id]) continue;
         used.add(xy(p.x, p.y));
@@ -2019,18 +2213,21 @@
   //   last：相手の最後の何個のハートは、決め技（finish の技）でしか減らないか
   //   on  ：条件の名前が入っているかを調べる関数（点検では、全員が仲間になったものとして調べる）
   //   pick：えらんだ仲間（leader 以外の名前の一覧）。書かなければ、えらべる仲間の上から choose 人
-  //   choose を書いた戦いでは、party のうち条件（if）に合う人が「えらべる仲間」。
-  //   えらべる仲間が choose 人より少ないとき（テスト用メニューでとんだときなど）は、全員からえらべる
+  //   choose を書いた戦いでは、party のうち条件（if・unless）のある人からえらぶ。そのうち条件に合う人が「えらべる仲間」。
+  //   条件のない人（強いモードの合体戦のイーブイ・ニンフィア）は、えらばずに、いつも戦う。
+  //   えらべる仲間が choose 人より少ないとき（テスト用メニューでとんだときなど）は、条件のある全員からえらべる
   function battleOf(id, on = flagOn, pick = null) {
     const def = BT[id];
     if (!def || typeof def !== "object") return null;
     const all = battleParty(def);
     const choose = Math.max(0, Math.floor(Number(def.choose) || 0));
     const others = all.filter((p) => p.who !== def.leader);
-    let can = others.filter((p) => visibleWith(p, on));
-    if (choose && can.length < choose) can = others;
+    const optional = choose ? others.filter((p) => p.if != null || p.unless != null) : others;
+    const fixed = others.filter((p) => !optional.includes(p));
+    let can = optional.filter((p) => visibleWith(p, on));
+    if (choose && can.length < choose) can = optional;
     const chosen = !choose ? can : pick ? can.filter((p) => pick.includes(p.who)) : can.slice(0, choose);
-    const members = all.filter((p) => p.who === def.leader || chosen.includes(p)).map((p) => ({
+    const members = all.filter((p) => p.who === def.leader || fixed.includes(p) || chosen.includes(p)).map((p) => ({
       who: p.who,
       leader: p.who === def.leader,
       commands: toArray(p.commands).filter((c) => MV[c]),
@@ -2076,17 +2273,34 @@
   }
 
   // 攻撃の技の強さ（点検で「いちばん強い攻撃」を選ぶため）
+  //   主人公の攻撃を強くする技（boost。強いモードのパパ）は、攻撃の次に選ぶ（防ぐ技よりは先）
   const attackValue = (b, id) => {
     const mv = MV[id];
+    if (mv && mv.kind === "boost") return 0;
     if (!mv || mv.kind !== "attack") return -1;
     return (Number(mv.power) || 0) * Math.max(1, Number(mv.hits) || 1) * (b.weak.includes(mv.type) ? 2 : 1);
   };
 
+  // 技の名前（コマンドのボタンと、技を使ったときの文）
+  //   {call} は、PCだけの pc-images/name.js の call（強いモードのパパが呼ぶ呼び名）。
+  //   呼び名がないとき（name.js がない・call がない・公開ページ）は、技の noCall を使う（書かなければ {call} を {name} にする）
+  function moveName(id) {
+    const mv = MV[id] || {};
+    const raw = String(mv.name || id || "");
+    if (!raw.includes("{call}")) return fill(raw);
+    const call = nameCall();
+    if (!call) return fill(mv.noCall || raw.split("{call}").join("{name}"));
+    return fill(raw.split("{call}").join(call));
+  }
+
   // 1ターン分の出来事を計算する（画面には出さない）
   //   picks：戦う仲間それぞれが選んだ技の名前（members と同じ順番。さくせんで動く仲間の分は null）
   //   quiet：true なら文を作らない（点検で、何度も計算するため）
+  //   rand：技の fail（強いモードのパパの「スマホに夢中」）に使う乱数（0 以上 1 未満）。
+  //         書かなければ、いつも起こらない（点検で、最短のターン数を数えるとき）。乱数を使うのは、この fail だけ
   //   返り値：{ state：ターンのあとの状態, steps：画面に出す文と、そのときの状態（st）・動き（fx）の一覧 }
-  function battleTurn(b, st0, picks, quiet) {
+  function battleTurn(b, st0, picks, quiet, rand) {
+    const luck = typeof rand === "function" ? rand : () => 1;
     const st = Object.assign({}, st0, { charged: Object.assign({}, st0.charged) });
     const e = b.enemy;
     const steps = [];
@@ -2112,13 +2326,19 @@
       }
     };
 
-    // 仲間の番（party の上から順）
+    // 仲間の番（party の上から順。ただし、このターンの最初に動く技〔MOVES の first〕を選んだ仲間が、先に動く）
     let boost = 0;           // てだすけの倍率（次に動く仲間に効く）
     let guardBig = null;     // big の行動（ふぶきなど）を防ぐ技（大技でない攻撃には効かないので、そのときは技の miss を出す）
-    let guardAll = false;    // 相手の攻撃を、すべて防ぐ
-    for (let i = 0; i < b.members.length && !st.won; i++) {
+    let guardAll = null;     // 相手の攻撃を、すべて防ぐ技（強いモードのパパの「におう立ち」など）
+    const powerUp = {};      // このターンだけの攻撃の倍率（boost の技。仲間 → 倍率）
+    const picked = (i) => (b.members[i].commands.length ? toArray(picks)[i] : null);
+    const first = (i) => Boolean(picked(i) && MV[picked(i)] && MV[picked(i)].first);
+    const order = b.members.map((m, i) => i);
+    const turnOrder = [...order.filter(first), ...order.filter((i) => !first(i))];
+    for (let k = 0; k < turnOrder.length && !st.won; k++) {
+      const i = turnOrder[k];
       const m = b.members[i];
-      const id = m.commands.length ? toArray(picks)[i] : pickTactic(m, st);
+      const id = m.commands.length ? picked(i) : pickTactic(m, st);
       const mv = id ? MV[id] : null;
       const charge = st.charged[m.who] || 0;
       delete st.charged[m.who];   // ためた力は、次に動いたときに使う（攻撃でなければ消える）
@@ -2128,7 +2348,15 @@
       const power = Math.max(0, Number(mv.power) || 0);
       const parts = [];
       const add = (text, extra) => { if (!quiet && text) parts.push(Object.assign({ text, st: snap(), actor: m.who }, extra)); };
-      const v = quiet ? null : vars({ who: whoName(m.who), move: fill(mv.name || id) });
+      const v = quiet ? null : vars({ who: whoName(m.who), move: moveName(id), n: power });
+      // fail：ときどき、技の代わりに何もしない（強いモードのパパの「スマホに夢中」。rate は起こる割合）
+      if (mv.fail && typeof mv.fail === "object" && luck() < Number(mv.fail.rate)) {
+        if (!quiet) {
+          for (const ln of btLines(mv.fail.text, v)) add(ln);
+          act(parts);
+        }
+        continue;
+      }
       if (!quiet) {
         // 技の音（MOVES の sound）は、技の名前の文といっしょに鳴らす（数値を変えても、同じ技なら同じ音）
         add(mv.text ? btText(mv.text, v) : T("battleUse", v), { fx: mv.ribbon ? "ribbon" : "", sound: mv.sound || "" });
@@ -2139,13 +2367,15 @@
       if (mv.kind === "attack") {
         const weak = b.weak.includes(mv.type);
         // finish（決め技）は、残りのハートを全部へらす。ほかの技では、相手の最後の last 個のハートはへらせない（よけられる）
+        const up = mv.finish ? 1 : powerUp[m.who] || 1;   // このターンだけの倍率（boost）
         const dmg = mv.finish ? st.foe
-          : (power + st.cheer) * Math.max(1, Number(mv.hits) || 1) * (weak ? 2 : 1) * times * (charge || 1);
+          : (power + st.cheer) * Math.max(1, Number(mv.hits) || 1) * (weak ? 2 : 1) * times * (charge || 1) * up;
         const dealt = Math.max(0, Math.min(dmg, st.foe - (mv.finish ? 0 : Math.min(st.foe, b.last))));
         st.foe -= dealt;
         if (!quiet) {
           if (dealt > 0 || dmg <= 0) {
             if (charge > 1) add(T("battleCharged", { n: charge }));
+            if (up > 1) add(T("battlePowered", { n: up }));
             if (weak) add(T("battleWeak"));
             add(T("battleFoeDamage", vars({ n: dealt })), { fx: st.foe > 0 ? "hit" : "" });
           } else {
@@ -2171,11 +2401,17 @@
         st.cheerLeft = Math.max(1, Number(mv.turns) || 1);
         if (!quiet) add(T("battleCheer", { n: st.cheerLeft }), { fx: "cheer" });
       } else if (mv.kind === "help") {
-        const next = b.members.slice(i + 1).find((x) => x.commands.length || x.tactics.length);
+        // てだすけ：次に動く仲間（このターンの動く順で）の技を強くする
+        const next = turnOrder.slice(k + 1).map((x) => b.members[x]).find((x) => x.commands.length || x.tactics.length);
         if (next) boost = Math.max(2, power);
         if (!quiet) add(next ? T("battleHelp", { target: whoName(next.who), n: boost }) : T("battleHelpNone"), next ? { target: next.who, fx: "help" } : {});
+      } else if (mv.kind === "boost") {
+        // このターンだけ、target（主人公）の攻撃を power 倍にする（強いモードのパパ。first と組み合わせると、かならず間に合う）
+        const target = b.members.some((x) => x.who === mv.target) ? mv.target : null;
+        if (target) powerUp[target] = (powerUp[target] || 1) * Math.max(1, power);
+        if (!quiet && !toArray(mv.say).length) add(target ? T("battlePower", { target: whoName(target), n: Math.max(1, power) }) : T("battleHelpNone"));
       } else if (mv.kind === "guard") {
-        if (mv.all) guardAll = true;
+        if (mv.all) guardAll = mv;
         else guardBig = mv;
         if (!quiet && !toArray(mv.say).length) add(T("battleGuard"));
       } else if (mv.kind === "charge") {
@@ -2196,7 +2432,12 @@
         if (!quiet && a.text) add(btText(a.text, v), { sound: a.sound || "" });
         const dmg = Math.max(0, Math.floor(Number(a.damage) || 0));
         if (dmg > 0 && (guardAll || (guardBig && a.big))) {
-          if (!quiet) add(a.blocked ? btText(a.blocked, v) : T("battleBlocked"), { fx: "guard" });
+          // 防いだときの文：大技を「かまくら」などで防いだら、相手の行動の blocked。すべて防ぐ技なら、その技の blocked
+          const byBig = Boolean(guardBig && a.big);
+          const text = byBig && a.blocked ? btText(a.blocked, v)
+            : !byBig && guardAll.blocked ? btText(guardAll.blocked, v)
+              : T("battleBlocked");
+          if (!quiet) add(text, { fx: "guard" });
         } else if (dmg > 0) {
           // 防ぐ技を使ったのに、大技ではないので防げなかったときは、その理由（技の miss）を出す
           if (!quiet && guardBig) for (const ln of btLines(guardBig.miss, v)) add(ln);
@@ -2276,7 +2517,9 @@
   //            spam：全員が「いちばん強い攻撃」だけを選んだときの結果（{ win: true, turn: 3 } など）,
   //            guard：大技（big）が来るターンだけ防ぐ技を選び、ほかは「いちばん強い攻撃」を選んだときの結果
   //                   （防ぐ技を持つ仲間がいないときは null） }
-  function battleCheck(id, team, limit = 12) {
+  //   rand：技の fail（強いモードのパパの「スマホに夢中」）に使う数。書かなければ、いつも起こらないものとして調べる
+  //         （() => 0 なら、いつも起こるものとして調べる）
+  function battleCheck(id, team, limit = 12, rand) {
     const out = { win: 0, path: [], lose: 0, spam: null, guard: null };
     const b = battleOf(id, team.on, team.pick);
     if (!b) return out;
@@ -2289,7 +2532,7 @@
       const next = [];
       for (const node of layer) {
         for (const picks of joint) {
-          const r = battleTurn(b, node.st, picks, true);
+          const r = battleTurn(b, node.st, picks, true, rand);
           if (r.state.won) {
             if (!out.win) { out.win = n; out.path = [...node.path, picks]; }
             continue;
@@ -2310,7 +2553,7 @@
     const strong = b.members.map((m) => (m.commands.length ? m.commands.slice().sort((x, y) => attackValue(b, y) - attackValue(b, x))[0] : null));
     let s = battleStart(b);
     for (let n = 1; n <= limit; n++) {
-      s = battleTurn(b, s, strong, true).state;
+      s = battleTurn(b, s, strong, true, rand).state;
       if (s.won || s.lost) { out.spam = { win: s.won, turn: n }; break; }
     }
     // 大技の予告があるターンだけ防ぐ（1-3 なら、ふぶきの前だけ かまくら）。ほかは いちばん強い攻撃
@@ -2319,7 +2562,7 @@
       s = battleStart(b);
       for (let n = 1; n <= limit; n++) {
         const a = battleAction(b, s.turn);
-        s = battleTurn(b, s, strong.map((c, k) => (a && a.big && guards[k] ? guards[k] : c)), true).state;
+        s = battleTurn(b, s, strong.map((c, k) => (a && a.big && guards[k] ? guards[k] : c)), true, rand).state;
         if (s.won || s.lost) { out.guard = { win: s.won, turn: n }; break; }
       }
     }
@@ -2327,7 +2570,8 @@
   }
 
   // でたらめにコマンドを選んだとき、limit ターン以内に勝てる割合（%）。テスト用メニューの点検だけで使う
-  //   毎回同じ結果になるように、決まった順番の数（疑似乱数）で選ぶ（ゲームの中では乱数を使わない）
+  //   毎回同じ結果になるように、決まった順番の数（疑似乱数）で選ぶ（ゲームの中では、技の fail のほかは乱数を使わない）
+  //   技の fail（スマホに夢中）も、同じ数で起こす
   function battleRandom(id, team, trials = 400, limit = 15) {
     const b = battleOf(id, team.on, team.pick);
     if (!b) return 0;
@@ -2338,7 +2582,7 @@
       let s = battleStart(b);
       for (let n = 1; n <= limit; n++) {
         const picks = b.members.map((m) => (m.commands.length ? m.commands[Math.floor(rnd() * m.commands.length)] : null));
-        s = battleTurn(b, s, picks, true).state;
+        s = battleTurn(b, s, picks, true, rnd).state;
         if (s.won) { wins += 1; break; }
         if (s.lost) break;
       }
@@ -2809,7 +3053,8 @@
   // skip：画面をタップ（Enter・スペース）したときにすること（「入力中…」の文をすぐ出す・次の文へ進む）
   // wait：文を出したあと、まだ読んでいるところ（次の文は、タップしてから出す。設計書 第11節）
   // last：最後に出したメッセージ（タップを待つ間、この文の終わりに ▼ を出す）
-  const CV = { lastWho: undefined, chapter: "", skip: null, wait: false, last: null };
+  // next：「つづける ▶」を出しているあいだだけ、それを押す関数（Enter・スペースで押す）
+  const CV = { lastWho: undefined, chapter: "", skip: null, wait: false, last: null, next: null };
 
   function scrollChat() {
     requestAnimationFrame(() => { chat.log.scrollTop = chat.log.scrollHeight; });
@@ -3027,11 +3272,22 @@
       else put();
     },
 
+    // 「つづける ▶」のボタン。Enter・スペースでも押せる（PC。下のキーの受け口の CV.next）
+    //   ボタンを出しているあいだは、入力欄も選択肢も出ていないので、Enter がぶつからない。
+    //   キーを押しっぱなしにしたときの連続入力では押さない（前の文を送った Enter で、うっかり進まないように）
     proceed(cb) {
-      chat.foot.replaceChildren(el("button", {
-        type: "button", class: "next-btn", text: T("next"),
-        onclick: () => { chat.foot.replaceChildren(); CV.wait = false; cb(); },
-      }));
+      const token = gen;
+      const go = () => {
+        CV.next = null;
+        if (token !== gen) return;
+        chat.foot.replaceChildren();
+        CV.wait = false;
+        cb();
+      };
+      const btn = el("button", { type: "button", class: "next-btn", text: T("next"), onclick: go });
+      chat.foot.replaceChildren(btn);
+      CV.next = () => { if (btn.isConnected) go(); };
+      CV.next.btn = btn;
       scrollChat();
     },
 
@@ -3179,6 +3435,13 @@
       toast(T("noScene", { id }));
       return;
     }
+    // 合言葉・テスト用メニュー・強いモードで場面へとんだら、遊び直し（なかまの場面へ）の終わりの印は消す
+    if (jump && !(opts && opts.replay)) state.replayUntil = null;
+    // 最終章を終えたあとの「なかまの場面へ」：終える場面（REPLAY の until）へ進む所で、メニューへ戻る
+    if (state.replayUntil && id === state.replayUntil) {
+      endReplay();
+      return;
+    }
     // ほかの方法で場面へ進んだら（テスト用メニューなど）、はじめの演出はやめる
     if (intro && !(opts && opts.intro === intro)) stopIntro();
     gen += 1;
@@ -3187,14 +3450,19 @@
     if (NV.typer) { NV.typer.cancel(); NV.typer = null; }
     clearTimeout(NV.autoTimer);
     CV.skip = null;
+    CV.next = null;
     // 歩いている途中の場面にもどったとき（会話のあと・つづきから）は、はじめの会話をくり返さない
     const backToWalk = Boolean(walking(sc) && state.walk && state.walk.scene === id);
     // 公園で気配を探す場面は、1つでも見つけていたら、はじめの会話を出さない（最後のヒントの文から）
     const skipLines = backToWalk || Boolean(sc.search && parkCount() > 0);
     state.scene = id;
     state.atEnd = false;
+    BACKLOG.length = 0;   // バックログは、今の場面で出た文だけ
     // 遊び直し（なかまの場面へ）で、いちばん先まで進んだ所に追いついたら、ふつうの記録にもどす
-    if (state.main && sceneOrder(id) >= sceneOrder(state.main.scene)) state.main = null;
+    //   おたのしみの場面（data.js の bonus: true。強いモード）では、追いついたことにしない（「つづきから」の場所を変えない）
+    //   最終章を終えたあとの遊び直し（replayUntil がある）では、追いついたことにしない
+    //   （「はじめから」のあとは、遊び直す場面が今の所より先にあるため。終えたら、今の所へもどす）
+    if (state.main && !sc.bonus && !state.replayUntil && sceneOrder(id) >= sceneOrder(state.main.scene)) state.main = null;
     state.chapter = sc.chapter || (jump ? inherited(id, "chapter") : state.chapter);
     state.bg = sc.bg || (jump ? inherited(id, "bg") : state.bg);
     applyMeet(sc);
@@ -3358,7 +3626,12 @@
   function leave(sc, view) {
     if (hasChoices(sc)) return askChoice(sc, view);
     if (sc.input) return askInput(sc, view);
-    if (sc.end) return view === ChatView ? view.proceed(() => showEnd(sc)) : showEnd(sc);
+    if (sc.end) {
+      if (view === ChatView) return view.proceed(() => showEnd(sc));
+      // 文のあとの演出（finale。4-6 エピローグ）：雪と最後のイラストのあと、クリックで終わりの画面へ
+      if (sc.finale) return view.finale(sc, () => showEnd(sc));
+      return showEnd(sc);
+    }
     // knock：暗い窓の画面で、タップを待ってから次の場面へ（メッセージ画面だけ。2-7 のiPhone側）
     if (sc.knock && sc.next && view === ChatView) return view.knock(sc, () => runScene(sc.next));
     // search：公園で気配を探す。必要な数に達したら、「つづける ▶」で次の場面へ（メッセージ画面だけ）
@@ -3464,20 +3737,26 @@
     const e = sc.end || {};
     gen += 1;
     state.atEnd = true;
+    if (e.complete === true) state.finished = true;   // 最終章を終えた記録（タイトル画面に「おたのしみ」を出す）
     storage.save(state);
     SND.setMode(sc.mute ? "off" : "short");   // 終わりの画面では、くり返す音（風など）を止める
     SND.ambient(null);
     SND.bgm(sceneBgm(sc));   // 曲は、その場面の曲のまま（エピローグの終わりの画面は、最終章の曲を続ける）
     setBg(endScreen, e.bg || state.bg || "night");
-    endScreen.replaceChildren(el("div", { class: "end-card" },
+    // スタッフの名前（end の credits。4-6）。条件（if・unless。pcDirect は、PCで直接開いたとき）に合う行だけを出す
+    const credits = toArray(e.credits).filter(visible)
+      .map((ln) => fill(ln && typeof ln === "object" ? ln.text : ln)).filter((t) => t.trim());
+    endScreen.replaceChildren(el("div", { class: "end-card" + (credits.length ? " has-credits" : "") },
       e.icon ? el("div", { class: "end-icon", text: e.icon, "aria-hidden": "true" }) : null,
       el("h2", { class: "end-title", text: fill(e.title || "") }),
       e.text ? el("p", { class: "end-text", text: fill(e.text) }) : null,
+      credits.length ? el("div", { class: "end-credits" }, credits.map((t) => el("p", { class: "end-credit", text: t }))) : null,
       el("div", { class: "end-buttons" },
         e.map ? el("button", { class: "btn", type: "button", text: houseMapOn() ? T("endHouseMap") : T("endMap"), onclick: openMap }) : null,
         e.next ? el("button", { class: "btn primary", type: "button", text: fill(e.nextLabel || T("endNext")), onclick: () => runScene(e.next) }) : null,
         el("button", { class: "btn", type: "button", text: T("toTitle"), onclick: showTitle }))));
-    setSnow(endScreen, Boolean(sc.snow));   // エピローグの雪は、終わりの画面でもふらせる
+    // 雪（場面の snow か、end の snow。4-6 のエピローグの終わりの画面）
+    setSnow(endScreen, Boolean(sc.snow || e.snow));
     show("end");
   }
 
@@ -3486,6 +3765,8 @@
   // ==============================================================
   // onClose：とじたときに1回だけ呼ぶ（場面が変わったあとは呼ばない）
   let onOverlayClose = null;
+  // 重ねて表示する画面が、自分で使うキー（回想ギャラリーの ←→ など）。使ったら true を返す。開くたびに空にする
+  let overlayKey = null;
   // メニュー（≡）・なかまノートのボタンが選ばれたままだと、Enter でまた開いてしまう
   // （Esc で閉じたとき）。開くときと閉じるときに、選ばれた状態を外して、Enter を文を進めるのに使う
   function releaseFocus() {
@@ -3493,6 +3774,7 @@
     if (a && a !== document.body && !overlay.contains(a) && a.matches("button, a") && typeof a.blur === "function") a.blur();
   }
   function openOverlay(content, onClose) {
+    overlayKey = null;
     overlay.replaceChildren(content);
     overlay.classList.add("open");
     releaseFocus();
@@ -3500,6 +3782,7 @@
     onOverlayClose = onClose ? () => { if (token === gen) onClose(); } : null;
   }
   function closeOverlay() {
+    overlayKey = null;
     overlay.classList.remove("open");
     overlay.replaceChildren();
     releaseFocus();
@@ -3530,6 +3813,42 @@
       el("div", { class: "party-grid" }, cells),
       el("p", { class: "panel-note", text: note }),
       el("button", { class: "btn primary", type: "button", text: T("close"), onclick: closeOverlay })));
+  }
+
+  // ---- バックログ（PC。設計書 第11節）：今の場面で出た文の一覧 ----
+  //   会話の枠の「ログ」ボタンか、↑キーで開く。Esc・「とじる」・外側のクリックで閉じると、もとの場面にもどる
+  //   開けないとき：物語の画面（PC）でないとき・ほかの画面を重ねているとき・はじめの演出のあいだ・
+  //   文を出さずに待っているあいだ（4-3 の余韻・絵の暗転など）・4-6 の文のあとの演出（雪と最後のイラスト）
+  //   入力欄や選択肢が出ていても開ける。開いているあいだ、入力欄からは外す（Enter で答えが送られないように）。
+  //   閉じたら、入力欄にもどす（入れかけの文字は、そのまま）
+  function canOpenLog() {
+    return currentView === "novel" && !intro && !overlay.classList.contains("open")
+      && NV.mode !== "pause" && NV.mode !== "finale";
+  }
+  function logRow(x) {
+    if (x.picked != null) return el("div", { class: "log-row picked", text: T("logPicked", { text: x.picked }) });
+    const c = x.who ? CHARS[x.who] : null;
+    const name = c ? (x.who === "hero" ? fill("{name}") : charName(c)) : "";
+    return el("div", { class: "log-row" + (name ? "" : " narration"), style: c ? `--c:${c.color || "#999"}` : null },
+      name ? el("span", { class: "log-name", text: name }) : null,
+      el("span", { class: "log-text", text: x.text }));
+  }
+  function openLog() {
+    if (!canOpenLog()) return;
+    const a = document.activeElement;
+    const back = a && ["INPUT", "TEXTAREA"].includes(a.tagName) ? a : null;
+    if (back) back.blur();
+    const list = el("div", { class: "log-list", tabindex: "-1" },
+      BACKLOG.length ? BACKLOG.map(logRow) : el("p", { class: "log-empty", text: T("logEmpty") }));
+    openOverlay(el("div", { class: "panel log-panel" },
+      el("h2", { text: T("logTitle") }),
+      el("p", { class: "panel-note", text: T("logNote") }),
+      list,
+      el("button", { class: "btn primary", type: "button", text: T("close"), onclick: closeOverlay })),
+    () => { if (back && back.isConnected) back.focus({ preventScroll: true }); });
+    // いちばん新しい文が見えるようにする。↑↓キー・ホイールで、さかのぼって読める
+    list.scrollTop = list.scrollHeight;
+    list.focus({ preventScroll: true });
   }
 
   // 夢の部屋の地図は、部屋が明るくなってから（data.js の set: "roomMap"）メニューに出す
@@ -3608,7 +3927,8 @@
   }
 
   // st：並べるときに使う記録（タイトル画面では、この端末に保存した記録）
-  function openReplay(st) {
+  // back：「◀ もどる」で開き直す画面（「おたのしみ」から開いたとき）
+  function openReplay(st, back) {
     const cells = replayRows(st).map(({ r, done }) => {
       const c = CHARS[r.who];
       if (!done) {
@@ -3630,10 +3950,103 @@
       el("h2", { text: T("replayTitle") }),
       el("p", { class: "panel-note pre", text: T("replayNote") }),
       el("div", { class: "party-grid" }, cells),
+      back ? el("button", { class: "btn", type: "button", text: T("replayBack"), onclick: back }) : null,
       el("button", { class: "btn primary", type: "button", text: T("close"), onclick: closeOverlay })));
   }
 
-  // 選んだ仲間の場面を、最初から始める。終えたら、話の続きへそのまま進む
+  // ---- クリア後のおたのしみ（設計書 第11節。PCのみ。data.js の BONUS） ----
+  //   最終章を終えた記録（state.finished）があるとき、タイトル画面に出す
+  //   中は「なかまの場面へ」（今の REPLAY）・「雪だるま戦・強いモード」・「回想ギャラリー」
+  //   st：この端末に保存した記録（タイトル画面から開く）
+  function openBonus(st) {
+    const again = () => openBonus(st);
+    const canReplay = replayRows(st).some((r) => r.done);
+    const hard = bonusHard();
+    openOverlay(el("div", { class: "panel bonus-panel" },
+      el("h2", { text: T("bonusTitle") }),
+      el("p", { class: "panel-note pre", text: T("bonusNote") }),
+      el("div", { class: "bonus-menu" },
+        canReplay ? el("button", { class: "btn", type: "button", text: T("bonusReplay"), onclick: () => openReplay(st, again) }) : null,
+        hard ? el("button", { class: "btn", type: "button", text: T("bonusHard"), onclick: startHard }) : null,
+        el("button", { class: "btn", type: "button", text: T("bonusGallery"), onclick: () => openGallery(again) })),
+      el("button", { class: "btn primary", type: "button", text: T("close"), onclick: closeOverlay })));
+  }
+
+  // 雪だるま戦・強いモード（data.js の BONUS の hard）：始める場面（bonus: true の場面）。書いていなければ null
+  const bonusHard = () => (BN.hard && SCN[BN.hard.scene] ? BN.hard : null);
+  //   なかまの場面へと同じように、いちばん先まで進んだ所を覚えてから始める（「つづきから」は、その所から）
+  //   仲間（友達とパパ）の条件は、始める場面の unset で消す（data.js）
+  function startHard() {
+    const h = bonusHard();
+    if (!h) return;
+    // タイトル画面から選んだときは、この端末に保存した記録で始める
+    if (currentView === "title") loadState(storage.load());
+    if (!state.main && state.scene && SCN[state.scene] && !SCN[state.scene].bonus) state.main = mainOf(state);
+    state.atEnd = false;
+    state.walk = null;   // 歩けるマップは、場面の最初の場所から
+    currentView = "";
+    runScene(h.scene, true);
+  }
+
+  // 回想ギャラリー：BONUS の gallery の絵のうち、見つかったものだけを並べる（PCで直接開いたときだけ探す）
+  //   back：「◀ もどる」で開き直す画面（おたのしみ）
+  const galleryList = () => toArray(BN.gallery)
+    .filter((g) => g && typeof g.image === "string" && g.image.trim())
+    .map((g) => ({ image: g.image.trim(), label: fill(g.label || "") }));
+  function openGallery(back) {
+    const items = galleryList();
+    const grid = el("div", { class: "gallery-grid" }, el("p", { class: "panel-note", text: T("galleryLoading") }));
+    const panel = el("div", { class: "panel gallery-panel" },
+      el("h2", { text: T("galleryTitle") }),
+      el("p", { class: "panel-note", text: T("galleryNote") }),
+      grid,
+      back ? el("button", { class: "btn", type: "button", text: T("replayBack"), onclick: back }) : null,
+      el("button", { class: "btn primary", type: "button", text: T("close"), onclick: closeOverlay }));
+    openOverlay(panel);
+    Promise.all(items.map((g) => (ART_DIR ? findPicture(g.image) : Promise.resolve("")))).then((srcs) => {
+      if (!panel.isConnected) return;   // 待っているあいだに、閉じた・ほかの画面にした
+      const found = items.map((g, i) => Object.assign({ src: srcs[i] }, g)).filter((g) => g.src);
+      if (!found.length) {
+        grid.replaceChildren(el("p", { class: "panel-note pre", text: T("galleryEmpty") }));
+        return;
+      }
+      grid.replaceChildren(...found.map((g, i) => el("button", {
+        class: "gallery-cell", type: "button", onclick: () => openViewer(found, i, back),
+      },
+        el("img", { class: "gallery-thumb", src: g.src, alt: "", draggable: "false" }),
+        el("span", { class: "gallery-label", text: g.label }))));
+    });
+  }
+  // 1枚を大きく見る。←→キー（またはボタン）で、まえ・つぎの絵。「一覧へ」で、並べた画面にもどる
+  function openViewer(found, start, back) {
+    let at = start;
+    const img = el("img", { class: "gallery-big", alt: "", draggable: "false" });
+    const cap = el("p", { class: "gallery-cap" });
+    const go = (step) => {
+      at = (at + step + found.length) % found.length;
+      img.src = found[at].src;
+      cap.textContent = `${found[at].label}　${T("galleryCount", { n: at + 1, total: found.length })}`;
+    };
+    const many = found.length > 1;
+    openOverlay(el("div", { class: "panel gallery-view" },
+      el("div", { class: "gallery-frame" }, img),
+      cap,
+      el("div", { class: "panel-buttons" },
+        many ? el("button", { class: "btn", type: "button", text: T("galleryPrev"), onclick: () => go(-1) }) : null,
+        el("button", { class: "btn", type: "button", text: T("galleryList"), onclick: () => openGallery(back) }),
+        many ? el("button", { class: "btn", type: "button", text: T("galleryNext"), onclick: () => go(1) }) : null),
+      el("button", { class: "btn primary", type: "button", text: T("close"), onclick: closeOverlay })));
+    go(0);
+    overlayKey = (e) => {
+      if (e.key === "ArrowLeft" && many) { if (!e.repeat) go(-1); return true; }
+      if (e.key === "ArrowRight" && many) { if (!e.repeat) go(1); return true; }
+      return false;
+    };
+  }
+
+  // 選んだ仲間の場面を、最初から始める
+  //   最終章を終える前：終えたら、話の続きへそのまま進む
+  //   最終章を終えたあと：REPLAY に until を書いた仲間（PCの3匹）は、終えたら「なかまの場面へ」のメニューへ戻る
   function startReplay(r) {
     // タイトル画面から選んだときは、この端末に保存した記録で始める
     if (currentView === "title") loadState(storage.load());
@@ -3643,9 +4056,32 @@
     state.walk = null;   // 歩けるマップは、場面の最初の場所から
     // その場面の中だけで使う条件は消してから始める（1-3 の友達など。data.js の REPLAY の unset）
     for (const f of toArray(r.unset)) state.flags = state.flags.filter((x) => x !== f);
+    // 終える場面（最終章を終えたあとだけ）
+    state.replayUntil = state.finished && r.until && SCN[r.until] && state.main ? r.until : null;
+    // 最終章を終えたあとは、遊び直しで増えた言葉・会った仲間も、終えたときに元へもどす
+    //   （「はじめから」のあとに遊び直しても、今の旅のなかまノートに、先の仲間が入らないように。遊ぶ前より減ることはない）
+    if (state.replayUntil) {
+      if (!Array.isArray(state.main.words)) state.main.words = state.words.slice();
+      if (!Array.isArray(state.main.met)) state.main.met = state.met.slice();
+    }
     // メッセージ画面（iPhone）で選んだときも、前の会話を消してから始める
     currentView = "";
-    runScene(r.scene, true);
+    runScene(r.scene, true, { replay: true });
+  }
+
+  // 遊び直しを終えて、「なかまの場面へ」のメニューへ戻る（最終章を終えたあと）
+  //   いちばん先まで進んだ所にもどしてから保存する（なかまノートの言葉・会った仲間・名前は、そのまま）。
+  //   メニューは、タイトル画面の上に開く（「◀ もどる」で、おたのしみ）
+  function endReplay() {
+    state.replayUntil = null;
+    if (state.main) {
+      Object.assign(state, state.main);
+      state.main = null;
+    }
+    storage.save(state);
+    showTitle();
+    const saved = normalized(storage.load());
+    openReplay(saved, () => openBonus(saved));
   }
 
   function confirmBox(message, yesLabel, onYes) {
@@ -3684,6 +4120,7 @@
     if (NV.typer) { NV.typer.cancel(); NV.typer = null; }
     clearTimeout(NV.autoTimer);
     CV.skip = null;
+    CV.next = null;
     closeOverlay();
     SND.setMode("short");   // タイトルと合言葉の画面では、短い音（正解音など）だけ。曲は鳴らさない
     SND.ambient(null);
@@ -3691,8 +4128,12 @@
     const save = storage.load();
     const canResume = Boolean(save && save.scene && SCN[save.scene]);
     // 「なかまの場面へ」は、この端末でクリアした仲間がいるときだけ出す
-    const saved = save ? normalized(save) : null;
-    const canReplay = Boolean(saved && replayRows(saved).some((r) => r.done));
+    //   最終章を終えた記録があるときは、代わりに「おたのしみ」を出す（「なかまの場面へ」は、その中に入る）
+    const saved = save || hasBonus() ? normalized(save) : null;
+    // 前の版の記録（クリア後の記録がまだない）：最終章を終えていれば、クリア後の記録を作っておく
+    if (saved && saved.finished && !hasBonus()) keepBonus(saved);
+    const finished = Boolean(saved && saved.finished);
+    const canReplay = !finished && Boolean(saved && replayRows(saved).some((r) => r.done));
     // 記録があるときは「つづきから」をいちばん上にする（まちがえて最初からにしないように）
     titleScreen.replaceChildren(el("div", { class: "title-wrap" },
       el("div", { class: "title-deco", text: "✦　✧　✦", "aria-hidden": "true" }),
@@ -3703,6 +4144,7 @@
         el("button", { class: canResume ? "btn" : "btn primary", type: "button", text: T("newGame"), onclick: () => newGame(canResume) }),
         el("button", { class: "btn", type: "button", text: T("keywordButton"), onclick: showKeyword }),
         canReplay ? el("button", { class: "btn", type: "button", text: T("titleReplay"), onclick: () => openReplay(saved) }) : null,
+        finished ? el("button", { class: "btn", type: "button", text: T("titleBonus"), onclick: () => openBonus(saved) }) : null,
         soundButton("btn ghost title-sound")),
       S.footer ? el("p", { class: "title-foot", text: S.footer }) : null));
     show("title");
@@ -3710,14 +4152,14 @@
 
   function newGame(hasSave) {
     const go = () => {
-      state = freshState();
-      storage.clear();
+      storage.clear();   // 進み具合の記録だけを消す（クリア後の記録 BONUS_KEY は残す）
+      state = normalized(null);   // 最終章を終えた記録・クリアした仲間・回数は、クリア後の記録から引きつぐ
       updateParty();
       // はじめの場面に intro（はじめの演出）があれば、画面を暗くしてから始める（1-1 の森）
       if (SCN[S.start] && SCN[S.start].intro && SCN[S.start].mode !== "chat") playIntro(S.start);
       else runScene(S.start);
     };
-    if (hasSave) confirmBox(T("confirmNew"), T("newGame"), go);
+    if (hasSave) confirmBox(hasBonus() ? T("confirmNewBonus") : T("confirmNew"), T("newGame"), go);
     else go();
   }
 
@@ -3810,6 +4252,24 @@
     }
     if (!st.main || typeof st.main !== "object" || !SCN[st.main.scene]) st.main = null;
     else if (!Array.isArray(st.main.flags)) st.main.flags = st.flags.slice();
+    if (typeof st.replayUntil !== "string" || !SCN[st.replayUntil] || !st.main) st.replayUntil = null;
+    // 数えている回数：0 以上の整数だけを残す
+    const counts = {};
+    if (st.counts && typeof st.counts === "object") {
+      for (const [k, v] of Object.entries(st.counts)) if (Number(v) > 0) counts[k] = Math.floor(Number(v));
+    }
+    st.counts = counts;
+    // 前の版の記録（finished がない）：最終章の終わりの画面（end の complete）にいれば、終えたとみなす
+    if (typeof (save && save.finished) !== "boolean") {
+      const doneAt = (m) => Boolean(m && m.atEnd && SCN[m.scene] && SCN[m.scene].end && SCN[m.scene].end.complete === true);
+      st.finished = doneAt(st) || doneAt(st.main);
+    }
+    // クリア後の記録（「はじめから」でも消さない）を合わせる
+    if (hasBonus()) {
+      st.finished = true;
+      st.cleared = unionList(st.cleared, strList(bonusRec.cleared).filter((w) => CHARS[w]));
+      st.counts = maxCounts(st.counts, bonusRec.counts);
+    }
     return st;
   }
 
@@ -3823,6 +4283,7 @@
   // 「なかまの場面へ」で遊び直している途中なら、いちばん先まで進んだ所から再開する
   function resume(save) {
     loadState(save);
+    state.replayUntil = null;
     if (state.main) {
       Object.assign(state, state.main);
       state.main = null;
@@ -3928,6 +4389,9 @@
     "partyTitle", "partyNote", "partyNoteMet", "partyNoteAll", "close",
     "menuTitle", "menuParty", "menuMap", "menuHouseMap", "menuToTitle", "menuNote",
     "menuReplay", "titleReplay", "replayTitle", "replayNote", "replayLocked",
+    "logButton", "logHelp", "logTitle", "logNote", "logEmpty", "logPicked",
+    "replayBack", "titleBonus", "bonusTitle", "bonusNote", "bonusReplay", "bonusHard", "bonusGallery", "battlePower", "battlePowered",
+    "galleryTitle", "galleryNote", "galleryLoading", "galleryEmpty", "galleryCount", "galleryPrev", "galleryNext", "galleryList",
     "mapTitle", "mapCaption", "explore", "roomDone", "darkDefault", "darkShine",
     "houseMapTitle", "houseMapCaption", "houseStarTemp",
     "iceHelp", "iceCount", "iceReset", "iceSkip", "iceBest", "iceClear",
@@ -4202,6 +4666,30 @@
         check(sc.end.next, `${at} の end`);
         checkText(sc.end.title, `${at} の end`);
         checkText(sc.end.text, `${at} の end`);
+        // スタッフの名前（credits。4-6）：文の行と同じ書き方（{ if: "pcDirect", text: … } で、PCで直接開いたときだけ）
+        //   「作：パパ」のような行は、話し手のセリフではなく、そのままの文として出す
+        if (sc.end.credits !== undefined && !Array.isArray(sc.end.credits)) errors.push(`${at} の end の credits は [ ] で囲んでください。`);
+        toArray(sc.end.credits).forEach((ln, i) => {
+          const where = `${at} の end の credits の${i + 1}行目`;
+          if (ln && typeof ln === "object" && ln.text == null) errors.push(`${where} に text（文章）がありません。`);
+          else checkText(ln && typeof ln === "object" ? ln.text : ln, where);
+        });
+        if (sc.end.snow !== undefined && typeof sc.end.snow !== "boolean") errors.push(`${at} の end の snow は、true か false にしてください。`);
+        if (sc.end.complete !== undefined && typeof sc.end.complete !== "boolean") errors.push(`${at} の end の complete は、true か false にしてください。`);
+      }
+      // 文のあとの演出（finale。4-6 エピローグ）：雪をふらせてから、最後のイラストに切りかえる
+      if (sc.finale !== undefined) {
+        const f = sc.finale;
+        if (!f || typeof f !== "object") errors.push(`${at} の finale は、{ snow: 3000, image: "ending.png", fade: 1000 } の形で書いてください。`);
+        else {
+          for (const key of ["snow", "fade"]) if (f[key] != null && !(Number(f[key]) >= 0)) errors.push(`${at} の finale の ${key} は、0 以上の数（ミリ秒）にしてください。`);
+          if (f.image !== undefined && (typeof f.image !== "string" || !f.image.trim() || /^[\\/]|\.\./.test(f.image.trim()))) {
+            errors.push(`${at} の finale の image は、"ending.png" のように、pc-images の中の画像の場所を書いてください。`);
+          }
+          for (const key of Object.keys(f)) if (!["snow", "image", "fade"].includes(key)) warnings.push(`${at} の finale の「${key}」は使えません（snow・image・fade）。`);
+        }
+        if (!sc.end) warnings.push(`${at} の finale：end（終わりの画面）がない場面なので、使われません。`);
+        if (sc.mode === "chat") warnings.push(`${at} の finale：メッセージ形式（chat）の場面では、使われません。`);
       }
       if (walking(sc)) {
         if (sc.next || sc.choices || sc.input || sc.end) {
@@ -4255,6 +4743,36 @@
       if (!r.scene) errors.push(`${at}：始める場面（scene）が書かれていません。`);
       else check(r.scene, at);
       checkText(r.label, `${at} の label`);
+      if (r.until !== undefined) {
+        check(r.until, `${at} の until`);
+        if (r.scene && r.until === r.scene) errors.push(`${at}：until（終える場面）が、始める場面と同じです。`);
+        else if (SCN[r.until] && SCN[r.scene] && deviceOf(r.until) !== deviceOf(r.scene)) warnings.push(`${at}：until の場面「${r.until}」は、始める場面とちがう端末の場面です。`);
+      }
+    });
+    // クリア後のおたのしみ（BONUS）：強いモードの始める場面
+    for (const [id, sc] of Object.entries(SCN)) {
+      if (sc && sc.bonus !== undefined && typeof sc.bonus !== "boolean") errors.push(`場面「${id}」の bonus は、true か false にしてください。`);
+    }
+    if (BN.hard !== undefined) {
+      const h = BN.hard;
+      if (!h || typeof h !== "object" || !h.scene) errors.push("BONUS の hard は、{ scene: \"hard_start\" } のように、始める場面を書いてください。");
+      else {
+        check(h.scene, "BONUS の hard の scene");
+        if (SCN[h.scene] && !SCN[h.scene].bonus) warnings.push(`BONUS の hard の scene：場面「${h.scene}」に bonus: true がないので、遊ぶと「つづきから」の場所が変わるかもしれません。`);
+      }
+    }
+    // クリア後のおたのしみ（BONUS）：最終章を終えた記録を残す場面と、回想ギャラリーの絵
+    if (!Object.values(SCN).some((sc) => sc && sc.end && sc.end.complete === true)) {
+      warnings.push("end に complete: true を書いた場面がないので、最終章を終えた記録が残らず、タイトル画面に「おたのしみ」が出ません。");
+    }
+    if (BN.gallery !== undefined && !Array.isArray(BN.gallery)) errors.push("BONUS の gallery は [ ] で囲んでください。");
+    toArray(BN.gallery).forEach((g, i) => {
+      const at = `BONUS の gallery の${i + 1}番目`;
+      if (!g || typeof g !== "object" || typeof g.image !== "string" || !g.image.trim() || /^[\\/]|\.\./.test(g.image.trim())) {
+        errors.push(`${at}：{ image: "kaisou/グレイシア.png", label: "グレイシア" } のように、pc-images の中の画像の場所を書いてください。`);
+        return;
+      }
+      checkText(g.label, `${at} の label`);
     });
     if (PZ) {
       const rows = toArray(PZ.rows).map((r) => Array.from(String(r)));
@@ -4502,7 +5020,7 @@
   const condLabel = (conds) => conds.map((f) => (CHARS[f] ? charName(CHARS[f]) : f)).join("・");
 
   // 戦いの点検（data.js の BATTLES・MOVES）：書きまちがいと、勝てるかどうか
-  const MOVE_KINDS = ["attack", "help", "cheer", "heal", "guard", "charge"];
+  const MOVE_KINDS = ["attack", "help", "cheer", "heal", "guard", "charge", "boost"];
   function checkBattles(errors, warnings, check, checkLines, checkSound) {
     const used = new Set(Object.values(SCN).filter((sc) => sc && sc.battle).map((sc) => sc.battle));
     for (const [id, def] of Object.entries(BT)) {
@@ -4533,8 +5051,8 @@
         if (!toArray(m.commands).length && !toArray(m.tactics).length) warnings.push(`${where}（${charName(CHARS[m.who])}）には commands も tactics もないので、戦いでは動きません。`);
       });
       const choose = Number(def.choose) || 0;
-      const others = battleParty(def).filter((p) => p.who !== def.leader);
-      if (choose && choose > others.length) errors.push(`${at} の choose（えらぶ人数）が、party の仲間の数（${others.length}人）より多いです。`);
+      const others = battleParty(def).filter((p) => p.who !== def.leader && (p.if != null || p.unless != null));
+      if (choose && choose > others.length) errors.push(`${at} の choose（えらぶ人数）が、party の条件（if）のある仲間の数（${others.length}人）より多いです。`);
       const e = def.enemy;
       if (!e || typeof e !== "object") {
         errors.push(`${at} に enemy（相手）がありません。`);
@@ -4569,11 +5087,37 @@
         check(def.skip.next, `${at} の skip`);
         checkLines(def.skip.reply, `${at} の skip の reply`);
       }
-      // どう選んでも勝てない戦いになっていないか（仲間をえらぶ戦いは、えらび方を全部）
-      for (const team of battleTeams(id)) {
-        if (battleCheck(id, team).win) continue;
-        errors.push(`${at}：この戦いは、どう選んでも勝てません${team.label ? `（${team.label}）` : ""}。数値や技を見直してください。`);
+      // 負けたら戦いを終えて、ほかの場面へもどる（強いモード。retreat）
+      if (def.retreat !== undefined) {
+        const rt = def.retreat;
+        if (!rt || typeof rt !== "object" || !rt.next) errors.push(`${at} の retreat は、{ next: "hard_start", lines: [ … ] } のように、もどる場面（next）を書いてください。`);
+        else {
+          check(rt.next, `${at} の retreat`);
+          checkLines(rt.lines, `${at} の retreat の lines`, BATTLE_VARS);
+          if (def.lose !== undefined || def.skip !== undefined) warnings.push(`${at}：retreat があるときは、lose と skip は使われません（負けたら、すぐに retreat の next へもどります）。`);
+          if (rt.hint !== undefined) {
+            const h = rt.hint;
+            if (!h || typeof h !== "object" || !Array.isArray(h.lines) || !h.lines.length) errors.push(`${at} の retreat の hint は、{ count: "hardLose", lines: [[…], […]] } の形で書いてください。`);
+            else {
+              if (h.count !== undefined && (typeof h.count !== "string" || !h.count.trim())) errors.push(`${at} の retreat の hint の count は、名前（文字）で書いてください。`);
+              h.lines.forEach((l, k) => checkLines(l, `${at} の retreat の hint の${k + 1}回目`, BATTLE_VARS));
+            }
+          }
+        }
       }
+      // どう選んでも勝てない戦いになっていないか（仲間をえらぶ戦いは、えらび方を全部）
+      //   強いモード（hard: true）は、勝てない仲間の組み合わせがあってもよい。どの組み合わせでも勝てないときだけ知らせる
+      const teams = battleTeams(id);
+      const wins = teams.map((team) => battleCheck(id, team).win);
+      if (def.hard) {
+        if (teams.length && !wins.some(Boolean)) errors.push(`${at}：この戦いは、どの仲間の組み合わせでも勝てません。数値や技を見直してください。`);
+      } else {
+        teams.forEach((team, k) => {
+          if (wins[k]) return;
+          errors.push(`${at}：この戦いは、どう選んでも勝てません${team.label ? `（${team.label}）` : ""}。数値や技を見直してください。`);
+        });
+      }
+      if (def.hard !== undefined && typeof def.hard !== "boolean") errors.push(`${at} の hard は、true か false にしてください。`);
     }
     for (const [id, mv] of Object.entries(MV)) {
       const at = `MOVES の「${id}」`;
@@ -4586,7 +5130,19 @@
       checkLines(mv.text, `${at} の text`, BATTLE_VARS);
       checkLines(mv.say, `${at} の say`, BATTLE_VARS);
       checkLines(mv.miss, `${at} の miss`, BATTLE_VARS);
+      checkLines(mv.blocked, `${at} の blocked`, BATTLE_VARS);
       checkSound(mv.sound, `${at} の sound`, false);
+      // 強いモード（パパ）の技：このターンの最初に動く（first）・主人公を強くする（boost の target）・
+      //   ときどき何もしない（fail）・呼び名がないときの技の名前（noCall）
+      if (mv.first !== undefined && typeof mv.first !== "boolean") errors.push(`${at} の first は、true か false にしてください。`);
+      if (mv.kind === "boost" && !CHARS[mv.target]) errors.push(`${at} の target：「${mv.target}」というキャラクターがいません（boost で強くする仲間。例："hero"）。`);
+      if (mv.fail !== undefined) {
+        const f = mv.fail;
+        if (!f || typeof f !== "object" || !(Number(f.rate) >= 0 && Number(f.rate) <= 1)) errors.push(`${at} の fail は、{ rate: 1 / 3, text: "…" } の形で書いてください（rate は 0 から 1 までの数）。`);
+        else checkLines(f.text, `${at} の fail の text`, BATTLE_VARS);
+      }
+      if (mv.noCall !== undefined) checkLines(mv.noCall, `${at} の noCall`, BATTLE_VARS);
+      if (String(mv.name || "").includes("{call}") && mv.noCall === undefined) warnings.push(`${at}：name に {call} があるときは、呼び名がないときの名前（noCall）も書いてください（今は {call} を {name} にして出します）。`);
     }
   }
 
@@ -4632,6 +5188,8 @@
         return;
       }
       for (const n of toArray(ev.npc)) if (!CHARS[n]) errors.push(`${where}：「${n}」というキャラクターがいません。`);
+      if (ev.hidden !== undefined && typeof ev.hidden !== "boolean") errors.push(`${where} の hidden は、true か false にしてください。`);
+      else if (ev.hidden && !ev.npc) warnings.push(`${where}：hidden（姿を見せない）は、人物（npc）の出来事にだけ使えます。`);
       if (ev.door) {
         if (!m.edges.some((e) => e.id === ev.door)) errors.push(`${where}：地図「${sc.walk}」に、出入口「${ev.door}」がありません（house.js の edges の id）。`);
       } else if (ev.at == null) {
@@ -4639,7 +5197,7 @@
       }
       for (const p of eventCells(ev)) {
         if (!inside(p.x, p.y)) errors.push(`${where}：場所 [${p.x}, ${p.y}] が、地図の外です。`);
-        else if (blocked.has(xy(p.x, p.y))) warnings.push(`${where}：場所 [${p.x}, ${p.y}] に家具があります。`);
+        else if (blocked.has(xy(p.x, p.y))) { if (!ev.hidden) warnings.push(`${where}：場所 [${p.x}, ${p.y}] に家具があります。`); }
         else if (ev.npc) npcCells.add(xy(p.x, p.y));
       }
       if (!ev.say && !ev.next && !ev.choices) errors.push(`${where}：say（セリフ）か next（次の場面）を書いてください。`);
@@ -4816,19 +5374,28 @@
 
   // 戦いの点検（コマンドの選び方を全部ためして、何ターンで勝てるか・負けるかを調べた結果）
   //   仲間をえらぶ戦いは、えらび方ごとに1行。「攻撃だけ」は、全員がいちばん強い攻撃だけを選んだとき
+  //   強いモード（hard: true）は、仲間の組み合わせ（4人から3人の4通り）ごとに1行。勝てない組み合わせがあってもよい
+  //     （設計書で想定済み。警告の色にせず「想定どおり」と出す。どの組み合わせでも勝てないときは、data.js の点検でエラー）
+  //   技の fail（パパの「スマホに夢中」）がある組み合わせは、最短を「起こらないとき」で数え、「毎回起こるとき」も出す
   function battleTool() {
     const rows = [];
     for (const [sid, sc] of Object.entries(SCN)) {
       if (!sc || !sc.battle || !BT[sc.battle]) continue;
+      const def = BT[sc.battle];
       for (const team of battleTeams(sc.battle)) {
         const r = battleCheck(sc.battle, team);
         const rate = battleRandom(sc.battle, team);
-        const how = r.path.map((picks) => picks.filter(Boolean).map((c) => fill((MV[c] && MV[c].name) || c)).join("・")).join(" → ");
+        const bt = battleOf(sc.battle, team.on, team.pick);
+        const luck = Boolean(bt) && bt.members.some((m) => m.commands.some((c) => MV[c] && MV[c].fail));
+        const bad = luck ? battleCheck(sc.battle, team, 12, () => 0) : null;
+        const how = r.path.map((picks) => picks.filter(Boolean).map(moveName).join("・")).join(" → ");
         const result = (x) => (!x ? "決着がつかない" : x.win ? `${x.turn}ターンで勝つ` : `${x.turn}ターン目に負ける`);
         rows.push(el("li", {
-          class: r.win ? "" : "debug-error",
-          text: `${sid}（${sc.battle}）${team.label ? `［${team.label}］` : ""}：`
-            + `${r.win ? `最短${r.win}ターンで勝てる` : "勝てない"}`
+          // 強いモードの勝てない組み合わせは、設計書で想定済み（すべての組み合わせで勝てなくてよい）なので、警告にしない
+          class: r.win ? "" : def.hard ? "debug-expected" : "debug-error",
+          text: `${sid}（${sc.battle}）${def.hard ? "［強いモード］" : ""}${team.label ? `［${team.label}］` : ""}：`
+            + `${r.win ? `最短${r.win}ターンで勝てる${luck ? "（スマホに夢中にならなければ）" : ""}` : def.hard ? "勝てない（想定どおり：強いモードは、勝てない組み合わせがあってよい）" : "勝てない"}`
+            + `${bad ? `／スマホに夢中が毎回だと${bad.win ? `最短${bad.win}ターン` : "勝てない"}` : ""}`
             + `／攻撃だけだと${result(r.spam)}`
             + `${r.guard ? `／大技の予告のときだけ防ぎ、あとは攻撃だと${result(r.guard)}` : ""}`
             + `／でたらめに選ぶと、15ターン以内に勝てるのは約${rate}%`,
@@ -4883,23 +5450,29 @@
     loadNames().then(({ list, status }) => {
       nameInfo.textContent = status === "ok"
         ? `名前の一覧（name.js）：読みこめた（名前 ${list.counts.names}つ・名字 ${list.counts.family}つ）。1-1で名前を確認します。`
+          + `パパの呼び名（call）：${nameCall() ? "ある（強いモードの技の名前に使う）" : "ない（技の名前は「名前ーっ！」になる）"}。`
         : status === "empty"
           ? "名前の一覧（name.js）：ファイルはあるが、NAME_LIST の names が読めない（書きまちがいかもしれません。name.sample.js と見くらべてください）。名前は確認せずに進みます。"
           : `名前の一覧（name.js）：${ART_DIR}/name.js が見つからない。名前は確認せずに進みます。`;
     });
+    // 行の絵（4-3 の回想のイラスト）と、文のあとの演出の絵（4-6 の最後のイラスト。場面の finale の image）
     const paths = [];
     for (const sc of Object.values(SCN)) {
       for (const ln of toArray(sc && sc.lines)) {
         const p = ln && typeof ln === "object" && typeof ln.image === "string" ? ln.image.trim() : "";
         if (p && !paths.includes(p)) paths.push(p);
       }
+      const fp = sc && sc.finale && typeof sc.finale.image === "string" ? sc.finale.image.trim() : "";
+      if (fp && !paths.includes(fp)) paths.push(fp);
     }
-    const picInfo = el("div", { text: paths.length ? "行の絵（image）：調べています……" : "行の絵（image）：data.js に書かれていません。" });
+    // 回想ギャラリー（おたのしみ）の絵
+    for (const g of galleryList()) if (!paths.includes(g.image)) paths.push(g.image);
+    const picInfo = el("div", { text: paths.length ? "絵（image）：調べています……" : "絵（image）：data.js に書かれていません。" });
     if (paths.length) {
       Promise.all(paths.map(findPicture)).then((srcs) => {
         const missing = paths.filter((p, i) => !srcs[i]);
-        picInfo.textContent = `行の絵（image）：${paths.length}枚のうち ${paths.length - missing.length}枚が見つかった。`
-          + (missing.length ? `見つからない画像（その行は光らせる形で進む）：${missing.join("・")}` : "");
+        picInfo.textContent = `絵（4-3 の回想・4-6 の最後のイラスト）：${paths.length}枚のうち ${paths.length - missing.length}枚が見つかった。`
+          + (missing.length ? `見つからない画像（4-3 はその行を光らせる形、4-6 は9匹の並ぶ画面で進む）：${missing.join("・")}` : "");
       });
     }
     box.append(nameInfo, picInfo);
@@ -4932,14 +5505,16 @@
         el("button", { type: "button", text: "この場面へ", onclick: () => { panel.hidden = true; runScene(select.value, true); } })),
       el("div", { class: "debug-row" },
         el("button", { type: "button", text: "なかまと言葉を全部にする", onclick: () => { state.met = PARTY.slice(); state.words = PARTY.slice(); state.cleared = PARTY.slice(); storage.save(state); updateParty(); toast("なかまと言葉を全部そろえました（なかまの場面へは、PCとiPhoneの両方の仲間が出ます）"); } }),
-        el("button", { type: "button", text: "記録（セーブ）を消す", onclick: () => { storage.clear(); state = freshState(); updateParty(); toast("記録を消しました"); } }),
+        el("button", { type: "button", text: "記録（セーブ）を消す（おたのしみの記録も）", onclick: () => { storage.clear(); bonusStore.clear(); bonusRec = {}; state = freshState(); updateParty(); toast("記録を消しました（おたのしみの記録も消しました）"); } }),
+        // クリア後のおたのしみを試すため（タイトル画面に「おたのしみ」が出る）
+        el("button", { type: "button", text: "最終章を終えた記録をつける", onclick: () => { state.finished = true; storage.save(state); toast("最終章を終えた記録をつけました（タイトル画面に「おたのしみ」が出ます）"); } }),
         // 公園で気配を探す（GPSヒント機能）の記録だけを消す（見つけた公園・手動で増やした数・続けて見つからなかった回数）
         el("button", { type: "button", text: "気配の記録を消す", onclick: () => { clearParks(); storage.save(state); toast("気配の記録を消しました"); } })),
       el("h4", { text: "遊ぶ前の準備：友達の呼び名（ちがう呼び名にするときだけ。このPCだけに記録）" }),
       localTool(),
       el("h4", { text: "遊ぶ前の準備：プレゼントの場所（4-5。このPCだけに記録）" }),
       presentTool(),
-      el("h4", { text: "遊ぶ前の準備：PCだけのフォルダ（pc-images の名前の一覧と、4-3 の回想のイラスト）" }),
+      el("h4", { text: "遊ぶ前の準備：PCだけのフォルダ（pc-images の名前の一覧と、4-3 の回想・4-6 の最後のイラスト）" }),
       pcFilesTool(),
       el("h4", { text: "答えを暗号にする（駅名など、ページに書きたくない答え用）" }),
       secretTool(),
@@ -4987,6 +5562,7 @@
       return;
     }
     if (overlay.classList.contains("open")) {
+      if (overlayKey && overlayKey(e)) { e.preventDefault(); return; }
       if (e.key === "Escape") closeOverlay();
       return;
     }
@@ -4996,11 +5572,21 @@
       e.preventDefault();
       return;
     }
+    // バックログ（PC）：↑キーで開く（入力欄に文字を入れているとき〔漢字の変換など〕は、開かない。ボタンでは開ける）
+    if (e.key === "ArrowUp" && currentView === "novel" && !["input", "textarea", "select"].includes(tag) && !e.isComposing) {
+      e.preventDefault();
+      if (!e.repeat) openLog();
+      return;
+    }
     if (["input", "textarea", "select", "button", "a"].includes(tag)) return;
     if (e.key !== "Enter" && e.key !== " ") return;
     if (currentView === "novel") {
       e.preventDefault();
       nvAdvance("key");
+    } else if (currentView === "chat" && CV.next && CV.next.btn.isConnected) {
+      // 「つづける ▶」（メッセージ画面）：Enter・スペースで押す。押しっぱなしの連続入力では押さない
+      e.preventDefault();
+      if (!e.repeat) CV.next();
     } else if (currentView === "chat" && CV.skip) {
       e.preventDefault();
       CV.skip();
@@ -5013,7 +5599,9 @@
   const problems = validate();
   updateParty();
   // 名前の確認（1-1）の一覧は、先に読みこみはじめておく（PCで直接開いたときだけ。ないときは確認しない）
-  if (ART_DIR && Object.values(SCN).some((sc) => sc && sc.input && sc.input.check)) loadNames();
+  //   強いモード（おたのしみ）のパパの技の名前（{call}）にも使う
+  if (ART_DIR && (Object.values(SCN).some((sc) => sc && sc.input && sc.input.check)
+    || Object.values(MV).some((mv) => mv && String(mv.name || "").includes("{call}")))) loadNames();
   showProblems(problems.errors);
   if (DEBUG) setupDebug(problems);
   if (!handleUrlKey()) showTitle();
