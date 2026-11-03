@@ -2111,6 +2111,7 @@ button.replay-cell:active { transform: scale(.97); }
 .debug-present { flex-direction: column; align-items: stretch; }
 .debug-error { color: #a1122b; }
 .debug-warn { color: #8a5a00; }
+.debug-expected { color: #2f6b3a; }   /* 戦いの点検：想定どおり（強いモードの勝てない組み合わせ） */
 
 /* ---------------- 雪（data.js の場面の snow。エピローグと、そのあとの終わりの画面） ---------------- */
 /*  雪の位置・大きさ・速さは engine.js が決める（--x 横の位置 / --s 大きさ / --d 落ちる時間 / --sway 横のゆれ / --o こさ） */
