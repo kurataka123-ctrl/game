@@ -83,7 +83,8 @@
   //   {station} など  → SETTINGS.hidden に「表示用に隠す」形で書いた文字
   function fill(t) {
     return String(t == null ? "" : t).replace(/\{(\w+)\}/g, (whole, key) => {
-      if (key === "name") return state.name || S.defaultName || "";
+      // 名前を入れる前（「はじめから」のあと）に、おたのしみを遊んだときは、クリア後の記録の名前を使う
+      if (key === "name") return state.name || (state.finished && hasBonus() && bonusRec.name) || S.defaultName || "";
       if (LOCAL[key]) return localText(key);
       const hidden = S.hidden && S.hidden[key];
       return hidden ? unhide(hidden) : whole;
@@ -356,11 +357,57 @@
     },
     save(data) {
       try { localStorage.setItem(SAVE_KEY, JSON.stringify(data)); } catch (e) { /* 保存できない環境でも遊べる */ }
+      if (data && data.finished === true) keepBonus(data);
     },
     clear() {
       try { localStorage.removeItem(SAVE_KEY); } catch (e) { /* 何もしない */ }
     },
   };
+  // クリア後の記録（おたのしみ）：進み具合の記録とは別の保存名に置く
+  //   「はじめから」で進み具合の記録を消しても、こちらは残す（おたのしみ・強いモード・パパ・なかまの場面へ）
+  //   中身：finished（最終章を終えた）・cleared（クリアした仲間）・counts（強いモードの負けた回数など）・name（主人公の名前）
+  //   進み具合の記録を保存するとき、最終章を終えていれば、ここにも足していく（減らさない）
+  const BONUS_KEY = SAVE_KEY + "-bonus";
+  const bonusStore = {
+    load() {
+      try {
+        const data = JSON.parse(localStorage.getItem(BONUS_KEY));
+        return data && typeof data === "object" ? data : {};
+      } catch (e) { return {}; }
+    },
+    save(data) {
+      try { localStorage.setItem(BONUS_KEY, JSON.stringify(data)); } catch (e) { /* 保存できない環境でも遊べる */ }
+    },
+    clear() {
+      try { localStorage.removeItem(BONUS_KEY); } catch (e) { /* 何もしない */ }
+    },
+  };
+  let bonusRec = bonusStore.load();
+  const strList = (v) => (Array.isArray(v) ? v.filter((x) => typeof x === "string") : []);
+  const unionList = (a, b) => Array.from(new Set(strList(a).concat(strList(b))));
+  // 回数は、多いほうを残す（減らさない）
+  function maxCounts(a, b) {
+    const out = {};
+    for (const src of [a, b]) {
+      if (!src || typeof src !== "object") continue;
+      for (const [k, v] of Object.entries(src)) {
+        const n = Math.floor(Number(v));
+        if (n > 0 && !(out[k] >= n)) out[k] = n;
+      }
+    }
+    return out;
+  }
+  function keepBonus(st) {
+    const b = bonusRec;
+    bonusRec = {
+      finished: true,
+      cleared: unionList(b.cleared, st.cleared),
+      counts: maxCounts(b.counts, st.counts),
+      name: (typeof st.name === "string" && st.name) || (typeof b.name === "string" ? b.name : ""),
+    };
+    bonusStore.save(bonusRec);
+  }
+  const hasBonus = () => bonusRec.finished === true;
   // 遊ぶ前に、このPCで入れておく呼び名（data.js の SETTINGS.local。友達の呼び名など）
   //   公開ページに書かないため、この端末のブラウザだけに記録する。記録（セーブ）を消しても残る
   const LOCAL = S.local || {};
@@ -3413,7 +3460,9 @@
     BACKLOG.length = 0;   // バックログは、今の場面で出た文だけ
     // 遊び直し（なかまの場面へ）で、いちばん先まで進んだ所に追いついたら、ふつうの記録にもどす
     //   おたのしみの場面（data.js の bonus: true。強いモード）では、追いついたことにしない（「つづきから」の場所を変えない）
-    if (state.main && !sc.bonus && sceneOrder(id) >= sceneOrder(state.main.scene)) state.main = null;
+    //   最終章を終えたあとの遊び直し（replayUntil がある）では、追いついたことにしない
+    //   （「はじめから」のあとは、遊び直す場面が今の所より先にあるため。終えたら、今の所へもどす）
+    if (state.main && !sc.bonus && !state.replayUntil && sceneOrder(id) >= sceneOrder(state.main.scene)) state.main = null;
     state.chapter = sc.chapter || (jump ? inherited(id, "chapter") : state.chapter);
     state.bg = sc.bg || (jump ? inherited(id, "bg") : state.bg);
     applyMeet(sc);
@@ -4009,6 +4058,12 @@
     for (const f of toArray(r.unset)) state.flags = state.flags.filter((x) => x !== f);
     // 終える場面（最終章を終えたあとだけ）
     state.replayUntil = state.finished && r.until && SCN[r.until] && state.main ? r.until : null;
+    // 最終章を終えたあとは、遊び直しで増えた言葉・会った仲間も、終えたときに元へもどす
+    //   （「はじめから」のあとに遊び直しても、今の旅のなかまノートに、先の仲間が入らないように。遊ぶ前より減ることはない）
+    if (state.replayUntil) {
+      if (!Array.isArray(state.main.words)) state.main.words = state.words.slice();
+      if (!Array.isArray(state.main.met)) state.main.met = state.met.slice();
+    }
     // メッセージ画面（iPhone）で選んだときも、前の会話を消してから始める
     currentView = "";
     runScene(r.scene, true, { replay: true });
@@ -4074,7 +4129,9 @@
     const canResume = Boolean(save && save.scene && SCN[save.scene]);
     // 「なかまの場面へ」は、この端末でクリアした仲間がいるときだけ出す
     //   最終章を終えた記録があるときは、代わりに「おたのしみ」を出す（「なかまの場面へ」は、その中に入る）
-    const saved = save ? normalized(save) : null;
+    const saved = save || hasBonus() ? normalized(save) : null;
+    // 前の版の記録（クリア後の記録がまだない）：最終章を終えていれば、クリア後の記録を作っておく
+    if (saved && saved.finished && !hasBonus()) keepBonus(saved);
     const finished = Boolean(saved && saved.finished);
     const canReplay = !finished && Boolean(saved && replayRows(saved).some((r) => r.done));
     // 記録があるときは「つづきから」をいちばん上にする（まちがえて最初からにしないように）
@@ -4095,14 +4152,14 @@
 
   function newGame(hasSave) {
     const go = () => {
-      state = freshState();
-      storage.clear();
+      storage.clear();   // 進み具合の記録だけを消す（クリア後の記録 BONUS_KEY は残す）
+      state = normalized(null);   // 最終章を終えた記録・クリアした仲間・回数は、クリア後の記録から引きつぐ
       updateParty();
       // はじめの場面に intro（はじめの演出）があれば、画面を暗くしてから始める（1-1 の森）
       if (SCN[S.start] && SCN[S.start].intro && SCN[S.start].mode !== "chat") playIntro(S.start);
       else runScene(S.start);
     };
-    if (hasSave) confirmBox(T("confirmNew"), T("newGame"), go);
+    if (hasSave) confirmBox(hasBonus() ? T("confirmNewBonus") : T("confirmNew"), T("newGame"), go);
     else go();
   }
 
@@ -4206,6 +4263,12 @@
     if (typeof (save && save.finished) !== "boolean") {
       const doneAt = (m) => Boolean(m && m.atEnd && SCN[m.scene] && SCN[m.scene].end && SCN[m.scene].end.complete === true);
       st.finished = doneAt(st) || doneAt(st.main);
+    }
+    // クリア後の記録（「はじめから」でも消さない）を合わせる
+    if (hasBonus()) {
+      st.finished = true;
+      st.cleared = unionList(st.cleared, strList(bonusRec.cleared).filter((w) => CHARS[w]));
+      st.counts = maxCounts(st.counts, bonusRec.counts);
     }
     return st;
   }
@@ -5442,7 +5505,7 @@
         el("button", { type: "button", text: "この場面へ", onclick: () => { panel.hidden = true; runScene(select.value, true); } })),
       el("div", { class: "debug-row" },
         el("button", { type: "button", text: "なかまと言葉を全部にする", onclick: () => { state.met = PARTY.slice(); state.words = PARTY.slice(); state.cleared = PARTY.slice(); storage.save(state); updateParty(); toast("なかまと言葉を全部そろえました（なかまの場面へは、PCとiPhoneの両方の仲間が出ます）"); } }),
-        el("button", { type: "button", text: "記録（セーブ）を消す", onclick: () => { storage.clear(); state = freshState(); updateParty(); toast("記録を消しました"); } }),
+        el("button", { type: "button", text: "記録（セーブ）を消す（おたのしみの記録も）", onclick: () => { storage.clear(); bonusStore.clear(); bonusRec = {}; state = freshState(); updateParty(); toast("記録を消しました（おたのしみの記録も消しました）"); } }),
         // クリア後のおたのしみを試すため（タイトル画面に「おたのしみ」が出る）
         el("button", { type: "button", text: "最終章を終えた記録をつける", onclick: () => { state.finished = true; storage.save(state); toast("最終章を終えた記録をつけました（タイトル画面に「おたのしみ」が出ます）"); } }),
         // 公園で気配を探す（GPSヒント機能）の記録だけを消す（見つけた公園・手動で増やした数・続けて見つからなかった回数）
