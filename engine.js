@@ -1549,21 +1549,52 @@
       // 負けたら、戦いを終えて、retreat の next の場面（強いモードの、仲間を集める所）へもどる
       //   ヒント（retreat の hint）：条件に合うとき（パパが仲間にいないとき）だけ、負けた回数を数えて、回数に合うセリフを出す
       //   回数は state.counts に残す（日をまたいでも数える）。回数が並べたセリフより多いときは、最後のセリフを毎回出す
+      //   ママの場面（retreat の mama）：条件に合うとき（PCで直接開いたとき）だけ、ヒントより先に出す。
+      //   出た回数を数えて、回数に合うセリフを出す（ヒントと同じ数え方。数える名前は mama の count）
+      //   順番：負ける → ママの場面 → ヒント → retreat の lines → next の場面
+      const countedLines = (spec, fallbackKey) => {
+        if (!spec || !toArray(spec.lines).length) return [];
+        const key = String(spec.count || fallbackKey);
+        const n = (Number(state.counts[key]) || 0) + 1;
+        state.counts[key] = n;
+        storage.save(state);
+        const list = toArray(spec.lines);
+        return toArray(list[Math.min(n, list.length) - 1]);
+      };
       const retreat = () => {
         const rt = def.retreat;
+        const m = rt.mama && typeof rt.mama === "object" && visible(rt.mama) ? rt.mama : null;
         const h = rt.hint && typeof rt.hint === "object" && visible(rt.hint) ? rt.hint : null;
-        let hint = [];
-        if (h && toArray(h.lines).length) {
-          const key = String(h.count || sc.battle);
-          const n = (Number(state.counts[key]) || 0) + 1;
-          state.counts[key] = n;
-          storage.save(state);
-          const list = toArray(h.lines);
-          hint = toArray(list[Math.min(n, list.length) - 1]);
-        }
+        const mama = countedLines(m, "mama");
+        const hint = countedLines(h, sc.battle);
         GRID.key = null;
         ui.menu.replaceChildren();
-        NovelView.say([...hint, ...toArray(rt.lines)], () => { if (alive()) runScene(rt.next); }, true);
+        const rest = () => NovelView.say([...hint, ...toArray(rt.lines)], () => { if (alive()) runScene(rt.next); }, true);
+        if (!mama.length) { rest(); return; }
+        // ママの場面：暗転して、戦いの画面から、背景と人物の画面に切りかえる。終わったら人物を下げて、ヒントへ
+        NV.mode = "idle";
+        novel.mark.hidden = true;
+        setSpeaker(null);
+        novel.text.textContent = "";
+        setShade(true, 500);
+        setTimeout(() => {
+          if (!alive()) return;
+          novel.battleBox.hidden = true;
+          novel.battleBox.replaceChildren();
+          NV.battle = null;
+          if (m.bg) setBg(novel.stage, m.bg);
+          if (m.bgm) SND.bgm(m.bgm);
+          renderChars(toArray(m.show).filter((id) => CHARS[id]));
+          setShade(false, 700);
+          setTimeout(() => {
+            if (!alive()) return;
+            NovelView.say(mama, () => {
+              if (!alive()) return;
+              renderChars([]);
+              rest();
+            }, true);
+          }, 700);
+        }, 500);
       };
       // 戦いを始める（仲間をえらぶ戦いなら、先にえらぶ）
       const begin = () => {
@@ -5162,6 +5193,17 @@
             else {
               if (h.count !== undefined && (typeof h.count !== "string" || !h.count.trim())) errors.push(`${at} の retreat の hint の count は、名前（文字）で書いてください。`);
               h.lines.forEach((l, k) => checkLines(l, `${at} の retreat の hint の${k + 1}回目`, BATTLE_VARS));
+            }
+          }
+          // ママの場面（強いモード。HARD_MAMA）：書き方はヒントと同じ。show の人物は CHARACTERS にあること
+          if (rt.mama !== undefined) {
+            const m = rt.mama;
+            if (!m || typeof m !== "object" || !Array.isArray(m.lines) || !m.lines.length) errors.push(`${at} の retreat の mama は、{ count: "hardMama", lines: [[…], […]] } の形で書いてください。`);
+            else {
+              if (m.count !== undefined && (typeof m.count !== "string" || !m.count.trim())) errors.push(`${at} の retreat の mama の count は、名前（文字）で書いてください。`);
+              if (rt.hint && m.count !== undefined && m.count === rt.hint.count) warnings.push(`${at} の retreat：mama と hint の count が同じ名前なので、1回負けると2つ増えます。`);
+              toArray(m.show).forEach((w) => { if (!CHARS[w]) errors.push(`${at} の retreat の mama の show：「${w}」が CHARACTERS にありません。`); });
+              m.lines.forEach((l, k) => checkLines(l, `${at} の retreat の mama の${k + 1}回目`, BATTLE_VARS));
             }
           }
         }
